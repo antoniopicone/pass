@@ -1,0 +1,13 @@
+[package]
+name = "passlib_ffi"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["staticlib", "cdylib"]
+
+[dependencies]
+passlib = { path = "../passlib" }
+libc = "0.2"

@@ -1,0 +1,22 @@
+[package]
+name = "passcli"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "pass"
+path = "src/main.rs"
+
+[dependencies]
+passlib = { path = "../passlib" }
+
+# CLI framework
+clap = { version = "4.4", features = ["derive"] }
+rpassword = "7.3"
+dialoguer = "0.11"
+colored = "2.1"
+
+# Error handling
+anyhow = "1.0"
