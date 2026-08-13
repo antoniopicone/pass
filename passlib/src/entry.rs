@@ -24,6 +24,15 @@ pub struct PasswordEntry {
     pub created_at: DateTime<Utc>,
     /// Last modification timestamp
     pub updated_at: DateTime<Utc>,
+    /// Monotonically increasing per-entry edit counter. Bumped on every
+    /// edit (including deletion). Used to resolve merge conflicts between
+    /// devices deterministically, without depending on clock sync.
+    pub revision: u64,
+    /// Soft-delete marker. Deletions are tombstones rather than removals
+    /// so that a deletion made on one device can be merged into another
+    /// device's copy of the vault instead of silently failing to
+    /// propagate.
+    pub deleted_at: Option<DateTime<Utc>>,
 }
 
 impl PasswordEntry {
@@ -41,6 +50,8 @@ impl PasswordEntry {
             password_serialized: password_clone,
             created_at: now,
             updated_at: now,
+            revision: 1,
+            deleted_at: None,
         }
     }
 
@@ -58,21 +69,61 @@ impl PasswordEntry {
         self.password_data.zeroize();
         self.password_data = password.clone();
         self.password_serialized = password;
-        self.updated_at = Utc::now();
+        self.touch();
     }
 
     /// Update metadata
     pub fn update(&mut self, website: Option<String>, url: Option<String>, username: Option<String>) {
+        let mut changed = false;
         if let Some(w) = website {
             self.website = w;
+            changed = true;
         }
         if let Some(u) = url {
             self.url = u;
+            changed = true;
         }
         if let Some(un) = username {
             self.username = un;
+            changed = true;
         }
+        if changed {
+            self.touch();
+        }
+    }
+
+    /// Mark this entry as deleted without removing it from the list, so
+    /// the deletion itself can be merged into other copies of the vault
+    /// instead of silently failing to propagate to devices that haven't
+    /// seen it yet.
+    pub fn mark_deleted(&mut self) {
+        self.deleted_at = Some(Utc::now());
+        self.touch();
+    }
+
+    /// Whether this entry is a tombstone (soft-deleted).
+    pub fn is_deleted(&self) -> bool {
+        self.deleted_at.is_some()
+    }
+
+    /// Bump the revision counter and refresh the modification timestamp.
+    /// Called on every edit, including deletion.
+    fn touch(&mut self) {
+        self.revision += 1;
         self.updated_at = Utc::now();
+    }
+
+    /// Deterministic content signature used to break merge ties between
+    /// two copies of an entry that share the same revision number.
+    pub(crate) fn fingerprint(&self) -> String {
+        format!(
+            "{}|{}|{}|{}|{}",
+            self.website,
+            self.url,
+            self.username,
+            self.password_serialized,
+            self.deleted_at.map(|d| d.to_rfc3339()).unwrap_or_default(),
+        )
     }
 
     /// Prepare entry for serialization
@@ -97,6 +148,7 @@ impl Drop for PasswordEntry {
 
 /// Summary view of a password entry (without the actual password)
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PasswordEntrySummary {
     pub id: String,
     pub website: String,

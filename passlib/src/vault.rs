@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use crate::crypto::{self, NONCE_SIZE, SALT_SIZE};
 use crate::entry::{PasswordEntry, PasswordEntrySummary};
 use crate::error::{PassError, Result};
+use crate::merge::{self, MergeSummary};
 
 /// Magic bytes to identify vault files: "PSVT"
 const MAGIC_BYTES: &[u8; 4] = b"PSVT";
@@ -202,7 +203,12 @@ impl Vault {
             return Err(PassError::CryptoError("Vault is locked".to_string()));
         }
 
-        Ok(self.entries.iter().map(PasswordEntrySummary::from).collect())
+        Ok(self
+            .entries
+            .iter()
+            .filter(|e| !e.is_deleted())
+            .map(PasswordEntrySummary::from)
+            .collect())
     }
 
     /// Get a specific entry by ID (including password)
@@ -213,24 +219,28 @@ impl Vault {
 
         self.entries
             .iter()
-            .find(|e| e.id == id)
+            .find(|e| e.id == id && !e.is_deleted())
             .ok_or_else(|| PassError::EntryNotFound(id.to_string()))
     }
 
     /// Delete an entry by ID
+    ///
+    /// This is a soft delete: the entry is kept as a tombstone so the
+    /// deletion can be merged into other copies of the vault instead of
+    /// disappearing only locally. See [`Vault::merge_entries`].
     pub fn delete_entry(&mut self, id: &str) -> Result<()> {
         if !self.is_unlocked {
             return Err(PassError::CryptoError("Vault is locked".to_string()));
         }
 
-        let initial_len = self.entries.len();
-        self.entries.retain(|e| e.id != id);
-        
-        if self.entries.len() == initial_len {
-            Err(PassError::EntryNotFound(id.to_string()))
-        } else {
-            Ok(())
-        }
+        let entry = self
+            .entries
+            .iter_mut()
+            .find(|e| e.id == id && !e.is_deleted())
+            .ok_or_else(|| PassError::EntryNotFound(id.to_string()))?;
+
+        entry.mark_deleted();
+        Ok(())
     }
 
     /// Update an existing entry
@@ -270,14 +280,45 @@ impl Vault {
         self.is_unlocked
     }
 
-    /// Get the number of entries
+    /// Get the number of (non-deleted) entries
     pub fn len(&self) -> usize {
-        self.entries.len()
+        self.entries.iter().filter(|e| !e.is_deleted()).count()
     }
 
     /// Check if the vault is empty
     pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
+        self.len() == 0
+    }
+
+    /// All entries, including tombstoned (deleted) ones. Needed for
+    /// syncing/merging, since deletions must propagate to other copies of
+    /// the vault rather than just being filtered out here.
+    pub fn entries_snapshot(&self) -> &[PasswordEntry] {
+        &self.entries
+    }
+
+    /// Merge another set of entries (e.g. pulled from a copy of this vault
+    /// synced from another device) into this vault, keeping whichever
+    /// version of each entry is newest. Does not save automatically.
+    ///
+    /// See the [`crate::merge`] module for the conflict-resolution rules.
+    pub fn merge_entries(&mut self, other: &[PasswordEntry]) -> MergeSummary {
+        let (merged, summary) = merge::merge_entries(&self.entries, other);
+        self.entries = merged;
+        summary
+    }
+
+    /// Convenience wrapper: unlock another copy of this vault at `path`
+    /// with the same master password and merge its entries into this one.
+    /// Does not save automatically — call [`Vault::save`] afterwards to
+    /// persist (and re-encrypt) the merged result.
+    pub fn merge_from_file<P: AsRef<Path>>(
+        &mut self,
+        path: P,
+        master_password: &str,
+    ) -> Result<MergeSummary> {
+        let other = Vault::unlock(path, master_password)?;
+        Ok(self.merge_entries(&other.entries))
     }
 }
 
@@ -369,5 +410,81 @@ mod tests {
 
         vault.delete_entry(&id).unwrap();
         assert_eq!(vault.len(), 0);
+    }
+
+    #[test]
+    fn test_deleted_entry_is_a_tombstone_not_a_removal() {
+        let temp_file = NamedTempFile::new().unwrap();
+        let path = temp_file.path().to_path_buf();
+        drop(temp_file);
+
+        let master_password = "test_password";
+        let mut vault = Vault::init(&path, master_password).unwrap();
+
+        let entry = PasswordEntry::new(
+            "Test".to_string(),
+            "https://test.com".to_string(),
+            "user".to_string(),
+            "pass".to_string(),
+        );
+        let id = vault.add_entry(entry).unwrap();
+        vault.delete_entry(&id).unwrap();
+
+        // Gone from the visible view...
+        assert_eq!(vault.len(), 0);
+        assert!(vault.get_entry(&id).is_err());
+
+        // ...but retained as a tombstone so it can be merged/synced.
+        assert_eq!(vault.entries_snapshot().len(), 1);
+        assert!(vault.entries_snapshot()[0].is_deleted());
+    }
+
+    #[test]
+    fn test_merge_from_file_reconciles_two_devices() {
+        let device_a_file = NamedTempFile::new().unwrap();
+        let device_a_path = device_a_file.path().to_path_buf();
+        drop(device_a_file);
+        let device_b_file = NamedTempFile::new().unwrap();
+        let device_b_path = device_b_file.path().to_path_buf();
+        drop(device_b_file);
+
+        let master_password = "shared_master_password";
+
+        // Both devices start from the same vault contents.
+        let mut vault_a = Vault::init(&device_a_path, master_password).unwrap();
+        let entry = PasswordEntry::new(
+            "GitHub".to_string(),
+            "https://github.com".to_string(),
+            "user".to_string(),
+            "old_password".to_string(),
+        );
+        let shared_id = vault_a.add_entry(entry).unwrap();
+        vault_a.save(master_password).unwrap();
+
+        // Device B gets a copy (e.g. via Nextcloud) and adds its own entry.
+        std::fs::copy(&device_a_path, &device_b_path).unwrap();
+        let mut vault_b = Vault::unlock(&device_b_path, master_password).unwrap();
+        let b_only_entry = PasswordEntry::new(
+            "GitLab".to_string(),
+            "https://gitlab.com".to_string(),
+            "user".to_string(),
+            "gitlab_password".to_string(),
+        );
+        vault_b.add_entry(b_only_entry).unwrap();
+        vault_b.save(master_password).unwrap();
+
+        // Meanwhile device A updates the shared entry and deletes nothing.
+        vault_a
+            .update_entry(&shared_id, None, None, None, Some("new_password".to_string()))
+            .unwrap();
+        vault_a.save(master_password).unwrap();
+
+        // Device A pulls device B's copy and merges.
+        let summary = vault_a.merge_from_file(&device_b_path, master_password).unwrap();
+        vault_a.save(master_password).unwrap();
+
+        assert_eq!(summary.added, 1); // GitLab entry from device B
+        assert_eq!(vault_a.len(), 2);
+        assert_eq!(vault_a.get_entry(&shared_id).unwrap().password(), "new_password");
     }
 }

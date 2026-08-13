@@ -51,6 +51,12 @@ enum Commands {
         id: String,
     },
 
+    /// Merge another copy of this vault (e.g. synced via Nextcloud) into it
+    Merge {
+        /// Path to the other vault file to merge from
+        other: PathBuf,
+    },
+
     /// Interactive mode - menu-driven interface for managing passwords
     Interactive,
 }
@@ -65,6 +71,7 @@ fn main() -> Result<()> {
         Commands::Get { query } => cmd_get(&cli.vault, &query),
         Commands::Delete { id } => cmd_delete(&cli.vault, &id),
         Commands::Update { id } => cmd_update(&cli.vault, &id),
+        Commands::Merge { other } => cmd_merge(&cli.vault, &other),
         Commands::Interactive => cmd_interactive(&cli.vault),
     }
 }
@@ -329,6 +336,46 @@ fn cmd_update(vault_path: &PathBuf, id: &str) -> Result<()> {
 
     println!();
     println!("{}", "✅ Password entry updated successfully!".green().bold());
+    println!();
+
+    Ok(())
+}
+
+/// Merge another copy of the vault (e.g. a copy synced via Nextcloud) into this one
+fn cmd_merge(vault_path: &PathBuf, other_path: &PathBuf) -> Result<()> {
+    println!("{}", "🔀 Merge Vault".bold().cyan());
+    println!();
+
+    if !other_path.exists() {
+        anyhow::bail!("Other vault file not found: {}", other_path.display());
+    }
+
+    let master_password = prompt_master_password()?;
+    let mut vault = Vault::unlock(vault_path, &master_password)
+        .context("Failed to unlock vault (wrong password?)")?;
+
+    let summary = vault
+        .merge_from_file(other_path, &master_password)
+        .context("Failed to merge vault (wrong password on the other vault?)")?;
+
+    vault.save(&master_password)
+        .context("Failed to save merged vault")?;
+
+    println!();
+    println!("{}", "✅ Merge complete!".green().bold());
+    println!("   Added:     {}", summary.added);
+    println!("   Updated:   {}", summary.updated);
+    println!("   Unchanged: {}", summary.unchanged);
+    if summary.conflicts > 0 {
+        println!(
+            "   {}",
+            format!(
+                "Conflicts resolved: {} (most recently edited version kept)",
+                summary.conflicts
+            )
+            .yellow()
+        );
+    }
     println!();
 
     Ok(())

@@ -1,0 +1,15 @@
+[package]
+name = "pass-native-host"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "pass-native-host"
+path = "src/main.rs"
+
+[dependencies]
+passlib = { path = "../passlib" }
+serde = { workspace = true }
+serde_json = { workspace = true }

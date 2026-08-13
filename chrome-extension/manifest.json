@@ -1,0 +1,18 @@
+{
+  "manifest_version": 3,
+  "name": "Pass – Secure Password Manager",
+  "version": "0.1.0",
+  "description": "Unlock, search and autofill your local, zero-knowledge Pass vault from Chromium.",
+  "permissions": ["nativeMessaging", "activeTab", "storage"],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Pass"
+  },
+  "content_scripts": [
+    {
+      "matches": ["http://*/*", "https://*/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

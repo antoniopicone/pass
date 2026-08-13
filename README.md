@@ -167,12 +167,43 @@ The vault file uses a custom binary format:
 
 The encrypted JSON payload contains all password entries with metadata.
 
+## 🔀 Merging vaults across devices
+
+Every entry carries a `revision` counter (bumped on every edit or delete)
+and a `deleted_at` tombstone instead of being removed outright. That makes
+merging two independently-edited copies of a vault a simple, deterministic,
+order-independent operation — no shared sync history required, and it
+naturally supports deletions propagating like any other edit. See
+`passlib/src/merge.rs` for the algorithm and its tests.
+
+```bash
+# Pull changes from another copy of the vault (e.g. synced via Nextcloud)
+pass merge /path/to/synced/passwords.vault
+```
+
+This is the building block for keeping the vault in sync across devices
+sharing a Nextcloud (or any file-sync) folder: point `merge` at the synced
+copy whenever it changes, then let the sync client push the merged result
+back out.
+
+## 🌐 Chromium extension
+
+`chrome-extension/` contains a Manifest V3 extension that unlocks the vault,
+searches/copies/autofills entries, and can trigger the same merge from its
+popup. It talks to the vault through a small native messaging host
+(`pass-native-host`) rather than over the network. See
+`chrome-extension/README.md` for setup.
+
 ## 🏗️ Architecture
 
-The project is organized as a Rust workspace with two packages:
+The project is organized as a Rust workspace with these packages:
 
-- **`passlib`**: Core library with encryption and vault management
+- **`passlib`**: Core library with encryption, vault management, and the
+  cross-device merge algorithm
 - **`passcli`**: Command-line interface application
+- **`passlib_ffi`**: C-compatible FFI bindings (used by native apps, e.g. `pass-apple`)
+- **`pass-native-host`**: Native messaging host bridging the Chromium
+  extension to `passlib`
 
 ### Library Structure
 
@@ -246,7 +277,8 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 - [ ] Clipboard integration with auto-clear
 - [ ] TOTP 2FA support
 - [ ] Secure password sharing
-- [ ] Browser extensions
+- [x] Browser extension (Chromium, local vault + merge — see `chrome-extension/`)
+- [ ] Direct Nextcloud (WebDAV) sync + file-watcher auto-merge
 
 ## ⚠️ Disclaimer
 
