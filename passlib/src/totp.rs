@@ -59,20 +59,29 @@ pub struct TotpConfig {
 }
 
 impl TotpConfig {
-    /// A compact, deterministic string of every field that affects the
-    /// generated codes or the label shown to the user. Used by
-    /// [`crate::entry::PasswordEntry::fingerprint`] to detect changes for
-    /// merge conflict resolution.
-    pub(crate) fn fingerprint(&self) -> String {
-        format!(
-            "{}|{}|{}|{}|{}|{}",
-            self.secret,
-            self.algorithm.as_str(),
-            self.digits,
-            self.period,
-            self.issuer.as_deref().unwrap_or(""),
-            self.account.as_deref().unwrap_or(""),
-        )
+    /// Serialize back to an `otpauth://totp/...` URI, in the same shape
+    /// KeePassXC itself writes into an entry's `otp` string field. This is
+    /// the inverse of [`parse_otpauth_uri`], used when saving a
+    /// [`crate::entry::PasswordEntry`]'s TOTP config into the KDBX entry.
+    pub fn to_otpauth_uri(&self) -> String {
+        let label = match &self.account {
+            Some(account) if !account.is_empty() => match &self.issuer {
+                Some(issuer) if !issuer.is_empty() => {
+                    format!("{}:{}", percent_encode(issuer), percent_encode(account))
+                }
+                _ => percent_encode(account),
+            },
+            _ => String::new(),
+        };
+
+        let mut uri = format!("otpauth://totp/{label}?secret={}", self.secret);
+        if let Some(issuer) = &self.issuer {
+            uri.push_str(&format!("&issuer={}", percent_encode(issuer)));
+        }
+        uri.push_str(&format!("&algorithm={}", self.algorithm.as_str()));
+        uri.push_str(&format!("&digits={}", self.digits));
+        uri.push_str(&format!("&period={}", self.period));
+        uri
     }
 }
 
@@ -188,6 +197,19 @@ pub fn parse_otpauth_uri(uri: &str) -> Result<TotpConfig> {
     })
 }
 
+fn percent_encode(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for byte in s.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(byte as char)
+            }
+            _ => out.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    out
+}
+
 fn percent_decode(s: &str) -> String {
     let bytes = s.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
@@ -300,5 +322,27 @@ mod tests {
     fn parse_otpauth_uri_rejects_non_totp_and_missing_secret() {
         assert!(parse_otpauth_uri("otpauth://hotp/me?secret=AAAA").is_err());
         assert!(parse_otpauth_uri("otpauth://totp/me?issuer=X").is_err());
+    }
+
+    #[test]
+    fn to_otpauth_uri_round_trips_through_parse() {
+        let original = TotpConfig {
+            secret: "JBSWY3DPEHPK3PXP".to_string(),
+            algorithm: TotpAlgorithm::Sha1,
+            digits: 6,
+            period: 30,
+            issuer: Some("GitHub".to_string()),
+            account: Some("me@example.com".to_string()),
+        };
+
+        let uri = original.to_otpauth_uri();
+        let parsed = parse_otpauth_uri(&uri).unwrap();
+
+        assert_eq!(parsed.secret, original.secret);
+        assert_eq!(parsed.issuer, original.issuer);
+        assert_eq!(parsed.account, original.account);
+        assert_eq!(parsed.algorithm, original.algorithm);
+        assert_eq!(parsed.digits, original.digits);
+        assert_eq!(parsed.period, original.period);
     }
 }

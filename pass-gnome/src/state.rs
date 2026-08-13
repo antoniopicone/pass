@@ -18,7 +18,7 @@ pub struct AppState {
 
 impl AppState {
     pub fn new() -> Self {
-        let default_path = dirs_home().join("passwords.vault");
+        let default_path = dirs_home().join("passwords.kdbx");
         Self {
             vault_path: default_path,
             unlocked: None,

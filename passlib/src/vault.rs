@@ -1,245 +1,171 @@
-use serde::{Deserialize, Serialize};
-use std::fs::{self, File};
-use std::io::{Read, Write};
-use std::path::{Path, PathBuf};
+//! Vault storage backed by a real KDBX4 database (via the `keepass` crate),
+//! the native file format used by KeePass/KeePassXC. This is what makes a
+//! vault written by `pass` openable directly in KeePassXC (and vice versa)
+//! instead of a proprietary format only `pass` understands.
+//!
+//! Mapping from [`PasswordEntry`] to a KDBX entry:
+//! - website/url/username/password -> the standard Title/URL/UserName/Password fields
+//! - TOTP -> the standard `otp` field (an `otpauth://` URI), the same
+//!   convention KeePassXC itself uses
+//! - deletion -> moving the entry into a "Recycle Bin" group (KeePassXC's
+//!   own soft-delete convention), not a hard remove, so it stays
+//!   recoverable and still participates in cross-device merges
+//! - cross-device merge -> [`keepass::Database::merge`], which reconciles
+//!   two independently-edited copies of the database using each object's
+//!   last-modification time — no custom merge algorithm needed here
+//!   anymore.
 
-use crate::crypto::{self, NONCE_SIZE, SALT_SIZE};
 use crate::entry::{PasswordEntry, PasswordEntrySummary};
 use crate::error::{PassError, Result};
-use crate::merge::{self, MergeSummary};
+use crate::totp::{self, TotpConfig};
+use chrono::{DateTime, NaiveDateTime, Utc};
+use keepass::config::KdfConfig;
+use keepass::db::{fields, merge::MergeLog, DatabaseOpenError, EntryId, EntryRef, GroupId, Times};
+use keepass::error::DatabaseKeyError;
+use keepass::{Database, DatabaseKey};
+use std::fs::{self, File};
+use std::path::{Path, PathBuf};
+use uuid::Uuid;
 
-/// Magic bytes to identify vault files: "PSVT"
-const MAGIC_BYTES: &[u8; 4] = b"PSVT";
-/// Current vault format version
-const VAULT_VERSION: u32 = 1;
+const RECYCLE_BIN_GROUP_NAME: &str = "Recycle Bin";
 
-/// Internal structure for serializing vault data
-#[derive(Serialize, Deserialize)]
-struct VaultData {
-    version: String,
-    entries: Vec<PasswordEntry>,
-}
-
-/// An in-memory password vault
+/// An open (decrypted) KDBX4 password vault.
 #[derive(Debug)]
 pub struct Vault {
-    entries: Vec<PasswordEntry>,
+    db: Database,
     path: PathBuf,
-    is_unlocked: bool,
 }
 
 impl Vault {
-    /// Create a new empty vault
-    pub fn new<P: AsRef<Path>>(path: P) -> Self {
-        Self {
-            entries: Vec::new(),
-            path: path.as_ref().to_path_buf(),
-            is_unlocked: false,
-        }
-    }
-
     /// Initialize a new vault file with a master password
     ///
-    /// Creates a new encrypted vault file. Returns an error if the file already exists.
+    /// Creates a new encrypted KDBX4 vault file. Returns an error if the file already exists.
     pub fn init<P: AsRef<Path>>(path: P, master_password: &str) -> Result<Self> {
         let path = path.as_ref();
-        
+
         if path.exists() {
-            return Err(PassError::CryptoError(
-                "Vault file already exists".to_string(),
-            ));
+            return Err(PassError::SaveError(format!(
+                "Vault file already exists: {}",
+                path.display()
+            )));
         }
 
-        let mut vault = Self::new(path);
-        vault.is_unlocked = true;
+        let mut db = Database::new();
+        strengthen_kdf(&mut db);
+
+        let mut vault = Self {
+            db,
+            path: path.to_path_buf(),
+        };
         vault.save(master_password)?;
-        
+
         Ok(vault)
     }
 
     /// Unlock an existing vault with the master password
     ///
-    /// Reads and decrypts the vault file. Returns an error if the password is incorrect.
+    /// Reads and decrypts the KDBX4 vault file. Returns an error if the password is incorrect.
     pub fn unlock<P: AsRef<Path>>(path: P, master_password: &str) -> Result<Self> {
         let path = path.as_ref();
-        
+
         if !path.exists() {
             return Err(PassError::VaultNotFound(path.display().to_string()));
         }
 
-        // Read the vault file
         let mut file = File::open(path)?;
-        let mut contents = Vec::new();
-        file.read_to_end(&mut contents)?;
-
-        // Validate minimum size
-        if contents.len() < 4 + 4 + SALT_SIZE + NONCE_SIZE + 16 {
-            return Err(PassError::InvalidVaultFormat);
-        }
-
-        // Parse header
-        let mut offset = 0;
-        
-        // Check magic bytes
-        if &contents[offset..offset + 4] != MAGIC_BYTES {
-            return Err(PassError::InvalidVaultFormat);
-        }
-        offset += 4;
-
-        // Check version
-        let version = u32::from_le_bytes([
-            contents[offset],
-            contents[offset + 1],
-            contents[offset + 2],
-            contents[offset + 3],
-        ]);
-        offset += 4;
-        
-        if version != VAULT_VERSION {
-            return Err(PassError::InvalidVaultFormat);
-        }
-
-        // Extract salt
-        let salt = &contents[offset..offset + SALT_SIZE];
-        offset += SALT_SIZE;
-
-        // Extract nonce
-        let nonce_bytes = &contents[offset..offset + NONCE_SIZE];
-        let mut nonce = [0u8; NONCE_SIZE];
-        nonce.copy_from_slice(nonce_bytes);
-        offset += NONCE_SIZE;
-
-        // Extract encrypted data (rest of the file)
-        let encrypted_data = &contents[offset..];
-
-        // Derive key from master password
-        let mut key = crypto::derive_key(master_password, salt)?;
-        
-        // Decrypt data
-        let decrypted_data = crypto::decrypt(encrypted_data, &key, &nonce)?;
-        crypto::zeroize_key(&mut key);
-
-        // Deserialize vault data
-        let mut vault_data: VaultData = serde_json::from_slice(&decrypted_data)
-            .map_err(|_| PassError::VaultCorrupted)?;
-
-        // Restore password data after deserialization
-        for entry in &mut vault_data.entries {
-            entry.restore_after_deserialization();
-        }
+        let db = Database::open(&mut file, DatabaseKey::new().with_password(master_password))
+            .map_err(map_open_error)?;
 
         Ok(Self {
-            entries: vault_data.entries,
+            db,
             path: path.to_path_buf(),
-            is_unlocked: true,
         })
     }
 
-    /// Save the vault to disk with encryption
+    /// Save the vault to disk, re-encrypting it with the given master password
     pub fn save(&mut self, master_password: &str) -> Result<()> {
-        if !self.is_unlocked {
-            return Err(PassError::CryptoError("Vault is locked".to_string()));
-        }
-
-        // Prepare entries for serialization
-        for entry in &mut self.entries {
-            entry.prepare_for_serialization();
-        }
-
-        // Serialize vault data
-        let vault_data = VaultData {
-            version: env!("CARGO_PKG_VERSION").to_string(),
-            entries: self.entries.clone(),
-        };
-        
-        let json_data = serde_json::to_vec(&vault_data)?;
-
-        // Generate salt and nonce
-        let salt = crypto::generate_salt();
-        let nonce = crypto::generate_nonce();
-
-        // Derive key from master password
-        let mut key = crypto::derive_key(master_password, &salt)?;
-
-        // Encrypt data
-        let encrypted_data = crypto::encrypt(&json_data, &key, &nonce)?;
-        crypto::zeroize_key(&mut key);
-
-        // Build file contents
-        let mut file_contents = Vec::new();
-        file_contents.extend_from_slice(MAGIC_BYTES);
-        file_contents.extend_from_slice(&VAULT_VERSION.to_le_bytes());
-        file_contents.extend_from_slice(&salt);
-        file_contents.extend_from_slice(&nonce);
-        file_contents.extend_from_slice(&encrypted_data);
-
-        // Write to file (atomic write using temp file)
-        let temp_path = self.path.with_extension("vault.tmp");
+        let temp_path = self.path.with_extension("kdbx.tmp");
         let mut file = File::create(&temp_path)?;
-        file.write_all(&file_contents)?;
+
+        self.db
+            .save(&mut file, DatabaseKey::new().with_password(master_password))
+            .map_err(|e| PassError::SaveError(e.to_string()))?;
         file.sync_all()?;
         drop(file);
 
-        // Atomic rename
         fs::rename(&temp_path, &self.path)?;
-
         Ok(())
     }
 
     /// Add a new password entry
     pub fn add_entry(&mut self, entry: PasswordEntry) -> Result<String> {
-        if !self.is_unlocked {
-            return Err(PassError::CryptoError("Vault is locked".to_string()));
-        }
+        let entry_id = parse_entry_id(&entry.id)?;
 
-        let id = entry.id.clone();
-        self.entries.push(entry);
-        Ok(id)
+        let mut root = self.db.root_mut();
+        let mut new_entry = root
+            .add_entry_with_id(entry_id)
+            .map_err(|e| PassError::SaveError(e.to_string()))?;
+
+        new_entry.edit(|e| {
+            e.set_unprotected(fields::TITLE, entry.website.clone());
+            e.set_unprotected(fields::URL, entry.url.clone());
+            e.set_unprotected(fields::USERNAME, entry.username.clone());
+            e.set_protected(fields::PASSWORD, entry.password().to_string());
+            if let Some(totp) = &entry.totp {
+                e.set_unprotected(fields::OTP, totp.to_otpauth_uri());
+            }
+        });
+
+        Ok(entry.id)
     }
 
-    /// Get all entries as summaries (without passwords)
+    /// Get all entries as summaries (without passwords), excluding
+    /// anything in the Recycle Bin
     pub fn list_entries(&self) -> Result<Vec<PasswordEntrySummary>> {
-        if !self.is_unlocked {
-            return Err(PassError::CryptoError("Vault is locked".to_string()));
-        }
+        let recycle_bin_id = self.recycle_bin_id();
 
         Ok(self
-            .entries
-            .iter()
-            .filter(|e| !e.is_deleted())
-            .map(PasswordEntrySummary::from)
+            .db
+            .iter_all_entries()
+            .filter(|e| Some(e.parent().id()) != recycle_bin_id)
+            .map(|e| PasswordEntrySummary::from(&to_password_entry(&e)))
             .collect())
     }
 
     /// Get a specific entry by ID (including password)
-    pub fn get_entry(&self, id: &str) -> Result<&PasswordEntry> {
-        if !self.is_unlocked {
-            return Err(PassError::CryptoError("Vault is locked".to_string()));
-        }
+    pub fn get_entry(&self, id: &str) -> Result<PasswordEntry> {
+        let entry_id = parse_entry_id(id)?;
+        let entry_ref = self
+            .db
+            .entry(entry_id)
+            .filter(|e| !self.is_in_recycle_bin(e))
+            .ok_or_else(|| PassError::EntryNotFound(id.to_string()))?;
 
-        self.entries
-            .iter()
-            .find(|e| e.id == id && !e.is_deleted())
-            .ok_or_else(|| PassError::EntryNotFound(id.to_string()))
+        Ok(to_password_entry(&entry_ref))
     }
 
     /// Delete an entry by ID
     ///
-    /// This is a soft delete: the entry is kept as a tombstone so the
-    /// deletion can be merged into other copies of the vault instead of
-    /// disappearing only locally. See [`Vault::merge_entries`].
+    /// This moves the entry into the vault's Recycle Bin group (creating
+    /// it if needed) rather than removing it outright — the same
+    /// soft-delete convention KeePassXC itself uses, so the entry stays
+    /// recoverable and the deletion still propagates correctly through
+    /// [`Vault::merge_entries`]/[`Vault::merge_from_file`].
     pub fn delete_entry(&mut self, id: &str) -> Result<()> {
-        if !self.is_unlocked {
-            return Err(PassError::CryptoError("Vault is locked".to_string()));
-        }
+        let entry_id = parse_entry_id(id)?;
+        self.require_active_entry(entry_id, id)?;
 
-        let entry = self
-            .entries
-            .iter_mut()
-            .find(|e| e.id == id && !e.is_deleted())
+        let recycle_bin_id = self.ensure_recycle_bin();
+
+        let mut entry_mut = self
+            .db
+            .entry_mut(entry_id)
             .ok_or_else(|| PassError::EntryNotFound(id.to_string()))?;
+        entry_mut
+            .track_changes()
+            .move_to(recycle_bin_id)
+            .map_err(|e| PassError::SaveError(e.to_string()))?;
 
-        entry.mark_deleted();
         Ok(())
     }
 
@@ -252,54 +178,78 @@ impl Vault {
         username: Option<String>,
         password: Option<String>,
     ) -> Result<()> {
-        if !self.is_unlocked {
-            return Err(PassError::CryptoError("Vault is locked".to_string()));
-        }
+        let entry_id = parse_entry_id(id)?;
+        self.require_active_entry(entry_id, id)?;
 
-        let entry = self
-            .entries
-            .iter_mut()
-            .find(|e| e.id == id)
+        let mut entry_mut = self
+            .db
+            .entry_mut(entry_id)
             .ok_or_else(|| PassError::EntryNotFound(id.to_string()))?;
+        let mut tracked = entry_mut.track_changes();
 
-        entry.update(website, url, username);
-        if let Some(pass) = password {
-            entry.set_password(pass);
+        if let Some(w) = website {
+            tracked.set_unprotected(fields::TITLE, w);
+        }
+        if let Some(u) = url {
+            tracked.set_unprotected(fields::URL, u);
+        }
+        if let Some(un) = username {
+            tracked.set_unprotected(fields::USERNAME, un);
+        }
+        if let Some(p) = password {
+            tracked.set_protected(fields::PASSWORD, p);
         }
 
         Ok(())
     }
 
     /// Attach (or replace) the TOTP/MFA secret for an entry
-    pub fn set_entry_totp(&mut self, id: &str, totp: crate::totp::TotpConfig) -> Result<()> {
-        if !self.is_unlocked {
-            return Err(PassError::CryptoError("Vault is locked".to_string()));
-        }
+    pub fn set_entry_totp(&mut self, id: &str, totp: TotpConfig) -> Result<()> {
+        let entry_id = parse_entry_id(id)?;
+        self.require_active_entry(entry_id, id)?;
 
-        let entry = self
-            .entries
-            .iter_mut()
-            .find(|e| e.id == id && !e.is_deleted())
+        let mut entry_mut = self
+            .db
+            .entry_mut(entry_id)
             .ok_or_else(|| PassError::EntryNotFound(id.to_string()))?;
+        entry_mut
+            .track_changes()
+            .set_unprotected(fields::OTP, totp.to_otpauth_uri());
 
-        entry.set_totp(totp);
         Ok(())
     }
 
     /// Remove the TOTP/MFA secret from an entry, if any
     pub fn clear_entry_totp(&mut self, id: &str) -> Result<()> {
-        if !self.is_unlocked {
-            return Err(PassError::CryptoError("Vault is locked".to_string()));
-        }
+        let entry_id = parse_entry_id(id)?;
+        self.require_active_entry(entry_id, id)?;
 
-        let entry = self
-            .entries
-            .iter_mut()
-            .find(|e| e.id == id && !e.is_deleted())
+        let mut entry_mut = self
+            .db
+            .entry_mut(entry_id)
             .ok_or_else(|| PassError::EntryNotFound(id.to_string()))?;
+        let mut tracked = entry_mut.track_changes();
+        tracked.fields.remove(fields::OTP);
+        tracked.times.last_modification = Some(Times::now());
 
-        entry.clear_totp();
         Ok(())
+    }
+
+    /// Merge another set of entries (e.g. pulled from a copy of this vault
+    /// synced from another device) into this vault. Does not save
+    /// automatically.
+    pub fn merge_entries(&mut self, other: &Database) -> Result<MergeSummary> {
+        let log = self.db.merge(other).map_err(|e| PassError::MergeError(e.to_string()))?;
+        Ok(MergeSummary::from_log(&log, self.db.num_entries()))
+    }
+
+    /// Convenience wrapper: unlock another copy of this vault at `path`
+    /// with the same master password and merge its entries into this one.
+    /// Does not save automatically — call [`Vault::save`] afterwards to
+    /// persist (and re-encrypt) the merged result.
+    pub fn merge_from_file<P: AsRef<Path>>(&mut self, path: P, master_password: &str) -> Result<MergeSummary> {
+        let other = Vault::unlock(path, master_password)?;
+        self.merge_entries(&other.db)
     }
 
     /// Get the vault file path
@@ -307,14 +257,13 @@ impl Vault {
         &self.path
     }
 
-    /// Check if the vault is unlocked
-    pub fn is_unlocked(&self) -> bool {
-        self.is_unlocked
-    }
-
     /// Get the number of (non-deleted) entries
     pub fn len(&self) -> usize {
-        self.entries.iter().filter(|e| !e.is_deleted()).count()
+        let recycle_bin_id = self.recycle_bin_id();
+        self.db
+            .iter_all_entries()
+            .filter(|e| Some(e.parent().id()) != recycle_bin_id)
+            .count()
     }
 
     /// Check if the vault is empty
@@ -322,35 +271,140 @@ impl Vault {
         self.len() == 0
     }
 
-    /// All entries, including tombstoned (deleted) ones. Needed for
-    /// syncing/merging, since deletions must propagate to other copies of
-    /// the vault rather than just being filtered out here.
-    pub fn entries_snapshot(&self) -> &[PasswordEntry] {
-        &self.entries
+    fn recycle_bin_id(&self) -> Option<GroupId> {
+        self.db.meta.recyclebin_uuid.map(GroupId::from_uuid)
     }
 
-    /// Merge another set of entries (e.g. pulled from a copy of this vault
-    /// synced from another device) into this vault, keeping whichever
-    /// version of each entry is newest. Does not save automatically.
-    ///
-    /// See the [`crate::merge`] module for the conflict-resolution rules.
-    pub fn merge_entries(&mut self, other: &[PasswordEntry]) -> MergeSummary {
-        let (merged, summary) = merge::merge_entries(&self.entries, other);
-        self.entries = merged;
-        summary
+    fn is_in_recycle_bin(&self, entry: &EntryRef) -> bool {
+        Some(entry.parent().id()) == self.recycle_bin_id()
     }
 
-    /// Convenience wrapper: unlock another copy of this vault at `path`
-    /// with the same master password and merge its entries into this one.
-    /// Does not save automatically — call [`Vault::save`] afterwards to
-    /// persist (and re-encrypt) the merged result.
-    pub fn merge_from_file<P: AsRef<Path>>(
-        &mut self,
-        path: P,
-        master_password: &str,
-    ) -> Result<MergeSummary> {
-        let other = Vault::unlock(path, master_password)?;
-        Ok(self.merge_entries(&other.entries))
+    fn require_active_entry(&self, entry_id: EntryId, display_id: &str) -> Result<()> {
+        self.db
+            .entry(entry_id)
+            .filter(|e| !self.is_in_recycle_bin(e))
+            .map(|_| ())
+            .ok_or_else(|| PassError::EntryNotFound(display_id.to_string()))
+    }
+
+    fn ensure_recycle_bin(&mut self) -> GroupId {
+        if let Some(id) = self.recycle_bin_id() {
+            if self.db.group(id).is_some() {
+                return id;
+            }
+        }
+
+        let mut root = self.db.root_mut();
+        let mut group = root.add_group();
+        group.name = RECYCLE_BIN_GROUP_NAME.to_string();
+        let group_id = group.id();
+        drop(group);
+
+        self.db.meta.recyclebin_uuid = Some(group_id.uuid());
+        self.db.meta.recyclebin_enabled = Some(true);
+        self.db.meta.recyclebin_changed = Some(Times::now());
+
+        group_id
+    }
+}
+
+/// Set Argon2id KDF parameters explicit enough to be secure (64 MiB / 10
+/// iterations / 4 lanes) rather than trusting the crate's own default,
+/// which is deliberately cheap for fast test runs (1 MiB / 50 iterations)
+/// and not something a real vault should ship with.
+fn strengthen_kdf(db: &mut Database) {
+    let version = match db.config.kdf_config {
+        KdfConfig::Argon2 { version, .. } | KdfConfig::Argon2id { version, .. } => version,
+        _ => return,
+    };
+
+    db.config.kdf_config = KdfConfig::Argon2id {
+        iterations: 10,
+        memory: 64 * 1024 * 1024, // bytes
+        parallelism: 4,
+        version,
+    };
+}
+
+fn parse_entry_id(id: &str) -> Result<EntryId> {
+    Uuid::parse_str(id)
+        .map(EntryId::from_uuid)
+        .map_err(|_| PassError::EntryNotFound(id.to_string()))
+}
+
+fn to_utc(naive: NaiveDateTime) -> DateTime<Utc> {
+    naive.and_utc()
+}
+
+fn to_password_entry(entry: &EntryRef) -> PasswordEntry {
+    let id = entry.id().uuid().to_string();
+    let website = entry.get_title().unwrap_or_default().to_string();
+    let url = entry.get_url().unwrap_or_default().to_string();
+    let username = entry.get_username().unwrap_or_default().to_string();
+    let password = entry.get_password().unwrap_or_default().to_string();
+    let created_at = entry.times.creation.map(to_utc).unwrap_or_else(Utc::now);
+    let updated_at = entry.times.last_modification.map(to_utc).unwrap_or(created_at);
+    let totp = entry.get_raw_otp_value().and_then(|uri| totp::parse_otpauth_uri(uri).ok());
+
+    PasswordEntry::from_parts(id, website, url, username, password, created_at, updated_at, totp)
+}
+
+/// A wrong master password surfaces as `DatabaseOpenError::Key(DatabaseKeyError::IncorrectKey)`.
+fn map_open_error(e: DatabaseOpenError) -> PassError {
+    if matches!(e, DatabaseOpenError::Key(DatabaseKeyError::IncorrectKey)) {
+        PassError::InvalidPassword
+    } else {
+        PassError::VaultCorrupted(e.to_string())
+    }
+}
+
+/// Summary of a merge operation, useful for logging/notifying the user.
+/// Counts only entry-level changes (group/icon changes aren't
+/// user-visible in `pass`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct MergeSummary {
+    /// Entries that existed only on the other side and were added here.
+    pub created: usize,
+    /// Entries that were updated with a newer version from the other side.
+    pub updated: usize,
+    /// Entries deleted (or moved to the Recycle Bin) as a result of the merge.
+    pub deleted: usize,
+    /// Entries that were already identical or already newer on this side.
+    pub unchanged: usize,
+}
+
+impl MergeSummary {
+    /// Whether the merge actually changed this vault.
+    pub fn changed(&self) -> bool {
+        self.created > 0 || self.updated > 0 || self.deleted > 0
+    }
+
+    fn from_log(log: &MergeLog, entries_after: usize) -> Self {
+        use keepass::db::merge::{MergeEventTarget, MergeEventType};
+
+        let mut created = 0;
+        let mut updated = 0;
+        let mut deleted = 0;
+
+        for event in &log.events {
+            if !matches!(event.target, MergeEventTarget::Entry(_)) {
+                continue;
+            }
+            match event.event_type {
+                MergeEventType::Created => created += 1,
+                MergeEventType::Updated => updated += 1,
+                MergeEventType::Deleted | MergeEventType::LocationUpdated => deleted += 1,
+                _ => {}
+            }
+        }
+
+        let unchanged = entries_after.saturating_sub(created + updated);
+        Self {
+            created,
+            updated,
+            deleted,
+            unchanged,
+        }
     }
 }
 
@@ -359,35 +413,30 @@ mod tests {
     use super::*;
     use tempfile::NamedTempFile;
 
+    fn temp_vault_path() -> PathBuf {
+        let f = NamedTempFile::new().unwrap();
+        let path = f.path().to_path_buf();
+        drop(f);
+        path
+    }
+
     #[test]
     fn test_vault_init_and_unlock() {
-        let temp_file = NamedTempFile::new().unwrap();
-        let path = temp_file.path().to_path_buf();
-        
-        // Remove the file so we can test init
-        drop(temp_file);
-
+        let path = temp_vault_path();
         let master_password = "super_secret_password_123";
 
-        // Initialize vault
         let vault = Vault::init(&path, master_password).unwrap();
-        assert!(vault.is_unlocked());
         assert_eq!(vault.len(), 0);
 
-        // Unlock vault
         let vault = Vault::unlock(&path, master_password).unwrap();
-        assert!(vault.is_unlocked());
         assert_eq!(vault.len(), 0);
     }
 
     #[test]
     fn test_wrong_password_fails() {
-        let temp_file = NamedTempFile::new().unwrap();
-        let path = temp_file.path().to_path_buf();
-        drop(temp_file);
-
+        let path = temp_vault_path();
         Vault::init(&path, "correct_password").unwrap();
-        
+
         let result = Vault::unlock(&path, "wrong_password");
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), PassError::InvalidPassword));
@@ -395,14 +444,10 @@ mod tests {
 
     #[test]
     fn test_add_and_retrieve_entry() {
-        let temp_file = NamedTempFile::new().unwrap();
-        let path = temp_file.path().to_path_buf();
-        drop(temp_file);
-
+        let path = temp_vault_path();
         let master_password = "test_password";
         let mut vault = Vault::init(&path, master_password).unwrap();
 
-        // Add entry
         let entry = PasswordEntry::new(
             "GitHub".to_string(),
             "https://github.com/login".to_string(),
@@ -412,10 +457,9 @@ mod tests {
         let id = vault.add_entry(entry).unwrap();
         vault.save(master_password).unwrap();
 
-        // Reload and verify
         let vault = Vault::unlock(&path, master_password).unwrap();
         assert_eq!(vault.len(), 1);
-        
+
         let retrieved = vault.get_entry(&id).unwrap();
         assert_eq!(retrieved.website, "GitHub");
         assert_eq!(retrieved.username, "user@example.com");
@@ -424,10 +468,7 @@ mod tests {
 
     #[test]
     fn test_delete_entry() {
-        let temp_file = NamedTempFile::new().unwrap();
-        let path = temp_file.path().to_path_buf();
-        drop(temp_file);
-
+        let path = temp_vault_path();
         let master_password = "test_password";
         let mut vault = Vault::init(&path, master_password).unwrap();
 
@@ -445,11 +486,8 @@ mod tests {
     }
 
     #[test]
-    fn test_deleted_entry_is_a_tombstone_not_a_removal() {
-        let temp_file = NamedTempFile::new().unwrap();
-        let path = temp_file.path().to_path_buf();
-        drop(temp_file);
-
+    fn test_deleted_entry_moves_to_recycle_bin_not_removed() {
+        let path = temp_vault_path();
         let master_password = "test_password";
         let mut vault = Vault::init(&path, master_password).unwrap();
 
@@ -466,20 +504,16 @@ mod tests {
         assert_eq!(vault.len(), 0);
         assert!(vault.get_entry(&id).is_err());
 
-        // ...but retained as a tombstone so it can be merged/synced.
-        assert_eq!(vault.entries_snapshot().len(), 1);
-        assert!(vault.entries_snapshot()[0].is_deleted());
+        // ...but still present in the database, inside the Recycle Bin.
+        assert_eq!(vault.db.num_entries(), 1);
+        let recycle_bin = vault.db.recycle_bin().expect("recycle bin should exist");
+        assert_eq!(recycle_bin.name, RECYCLE_BIN_GROUP_NAME);
     }
 
     #[test]
     fn test_merge_from_file_reconciles_two_devices() {
-        let device_a_file = NamedTempFile::new().unwrap();
-        let device_a_path = device_a_file.path().to_path_buf();
-        drop(device_a_file);
-        let device_b_file = NamedTempFile::new().unwrap();
-        let device_b_path = device_b_file.path().to_path_buf();
-        drop(device_b_file);
-
+        let device_a_path = temp_vault_path();
+        let device_b_path = temp_vault_path();
         let master_password = "shared_master_password";
 
         // Both devices start from the same vault contents.
@@ -505,7 +539,10 @@ mod tests {
         vault_b.add_entry(b_only_entry).unwrap();
         vault_b.save(master_password).unwrap();
 
-        // Meanwhile device A updates the shared entry and deletes nothing.
+        // Meanwhile device A updates the shared entry, ensuring its
+        // modification time is strictly newer than device B's copy (KDBX
+        // times only have second resolution).
+        std::thread::sleep(std::time::Duration::from_secs(1));
         vault_a
             .update_entry(&shared_id, None, None, None, Some("new_password".to_string()))
             .unwrap();
@@ -515,7 +552,7 @@ mod tests {
         let summary = vault_a.merge_from_file(&device_b_path, master_password).unwrap();
         vault_a.save(master_password).unwrap();
 
-        assert_eq!(summary.added, 1); // GitLab entry from device B
+        assert_eq!(summary.created, 1); // GitLab entry from device B
         assert_eq!(vault_a.len(), 2);
         assert_eq!(vault_a.get_entry(&shared_id).unwrap().password(), "new_password");
     }

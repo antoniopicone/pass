@@ -255,7 +255,7 @@ pub unsafe extern "C" fn vault_list_entries(
             for summary in entries {
                 // Get full entry to access password
                 if let Ok(entry) = vault_ref.get_entry(&summary.id) {
-                    c_entries.push(build_c_entry(entry));
+                    c_entries.push(build_c_entry(&entry));
                 }
             }
 
@@ -300,7 +300,7 @@ pub unsafe extern "C" fn vault_get_entry(
 
     match vault_ref.get_entry(&id_str) {
         Ok(entry) => {
-            let c_entry = Box::new(build_c_entry(entry));
+            let c_entry = Box::new(build_c_entry(&entry));
             *entry_out = Box::into_raw(c_entry);
             PassResult::Success
         }
@@ -510,10 +510,10 @@ pub unsafe extern "C" fn vault_clear_entry_totp(vault: *mut CVault, id: *const c
 pub unsafe extern "C" fn vault_merge_from_file(
     vault: *mut CVault,
     other_path: *const c_char,
-    added_out: *mut size_t,
+    created_out: *mut size_t,
     updated_out: *mut size_t,
     unchanged_out: *mut size_t,
-    conflicts_out: *mut size_t,
+    deleted_out: *mut size_t,
 ) -> PassResult {
     if vault.is_null() {
         return PassResult::ErrorInvalidInput;
@@ -535,8 +535,8 @@ pub unsafe extern "C" fn vault_merge_from_file(
             if vault_ref.save(&cvault.master_password).is_err() {
                 return PassResult::ErrorUnknown;
             }
-            if !added_out.is_null() {
-                *added_out = summary.added;
+            if !created_out.is_null() {
+                *created_out = summary.created;
             }
             if !updated_out.is_null() {
                 *updated_out = summary.updated;
@@ -544,8 +544,8 @@ pub unsafe extern "C" fn vault_merge_from_file(
             if !unchanged_out.is_null() {
                 *unchanged_out = summary.unchanged;
             }
-            if !conflicts_out.is_null() {
-                *conflicts_out = summary.conflicts;
+            if !deleted_out.is_null() {
+                *deleted_out = summary.deleted;
             }
             PassResult::Success
         }

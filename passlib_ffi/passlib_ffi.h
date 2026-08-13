@@ -58,12 +58,13 @@ PassResult vault_delete_entry(CVault *vault, const char*id);
 PassResult vault_set_entry_totp_uri(CVault *vault, const char *id, const char *otpauth_uri);
 PassResult vault_clear_entry_totp(CVault *vault, const char *id);
 
-// Cross-device merge (see passlib::merge for the algorithm). added_out /
-// updated_out / unchanged_out / conflicts_out may each be NULL if the
+// Cross-device merge, backed by the vault's underlying KDBX4 database merge
+// (last-modification-time based — see keepass::Database::merge). created_out /
+// updated_out / unchanged_out / deleted_out may each be NULL if the
 // caller doesn't need that count.
 PassResult vault_merge_from_file(CVault *vault, const char *other_path,
-                                 size_t *added_out, size_t *updated_out,
-                                 size_t *unchanged_out, size_t *conflicts_out);
+                                 size_t *created_out, size_t *updated_out,
+                                 size_t *unchanged_out, size_t *deleted_out);
 
 // Memory management
 void vault_free(CVault *vault);

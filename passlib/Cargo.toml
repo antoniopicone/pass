@@ -6,12 +6,9 @@ authors.workspace = true
 license.workspace = true
 
 [dependencies]
-argon2.workspace = true
-aes-gcm.workspace = true
-rand.workspace = true
+keepass = { version = "0.13.20", features = ["save_kdbx4", "totp", "_merge"] }
 zeroize.workspace = true
 serde.workspace = true
-serde_json.workspace = true
 chrono.workspace = true
 uuid.workspace = true
 thiserror.workspace = true

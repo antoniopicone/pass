@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::time::Duration;
 
-const DEFAULT_VAULT_PATH: &str = "passwords.vault";
+const DEFAULT_VAULT_PATH: &str = "passwords.kdbx";
 
 /// A secure, cross-platform password manager
 #[derive(Parser)]
@@ -258,7 +258,7 @@ fn cmd_list(vault_path: &PathBuf) -> Result<()> {
 }
 
 /// Find an entry by ID, falling back to a case-insensitive website search
-fn find_entry<'a>(vault: &'a Vault, query: &str) -> Result<&'a PasswordEntry> {
+fn find_entry(vault: &Vault, query: &str) -> Result<PasswordEntry> {
     vault
         .get_entry(query)
         .or_else(|_| {
@@ -307,7 +307,7 @@ fn cmd_get(vault_path: &PathBuf, query: &str) -> Result<()> {
     println!("{}: {}", "URL".bold(), entry.url);
     println!("{}: {}", "Username".bold(), entry.username);
     println!("{}: {}", "Password".bold().green(), entry.password().green());
-    print_totp_line(entry);
+    print_totp_line(&entry);
     println!("{}: {}", "ID".bright_black(), entry.id.bright_black());
     println!("{}: {}", "Created".bright_black(),
              entry.created_at.format("%Y-%m-%d %H:%M").to_string().bright_black());
@@ -450,17 +450,13 @@ fn cmd_merge(vault_path: &PathBuf, other_path: &PathBuf) -> Result<()> {
 
     println!();
     println!("{}", "✅ Merge complete!".green().bold());
-    println!("   Added:     {}", summary.added);
+    println!("   Created:   {}", summary.created);
     println!("   Updated:   {}", summary.updated);
     println!("   Unchanged: {}", summary.unchanged);
-    if summary.conflicts > 0 {
+    if summary.deleted > 0 {
         println!(
             "   {}",
-            format!(
-                "Conflicts resolved: {} (most recently edited version kept)",
-                summary.conflicts
-            )
-            .yellow()
+            format!("Deleted (or moved to Recycle Bin): {}", summary.deleted).yellow()
         );
     }
     println!();
@@ -727,11 +723,11 @@ fn run_merge(
     println!(
         "{}",
         format!(
-            "🔄 Merged from {} — added {}, updated {}, {} conflict(s) resolved.",
+            "🔄 Merged from {} — created {}, updated {}, {} deleted.",
             other_path.display(),
-            summary.added,
+            summary.created,
             summary.updated,
-            summary.conflicts
+            summary.deleted
         )
         .green()
     );
@@ -784,10 +780,10 @@ mod watch_tests {
 
     #[test]
     fn event_touches_matches_only_the_target_filename() {
-        let target: Option<&OsStr> = Some(OsStr::new("passwords.vault"));
+        let target: Option<&OsStr> = Some(OsStr::new("passwords.kdbx"));
 
         let matching = Event::new(notify::EventKind::Modify(notify::event::ModifyKind::Any))
-            .add_path(PathBuf::from("/tmp/sync/passwords.vault"));
+            .add_path(PathBuf::from("/tmp/sync/passwords.kdbx"));
         assert!(event_touches(&matching, target));
 
         let unrelated = Event::new(notify::EventKind::Modify(notify::event::ModifyKind::Any))
@@ -807,8 +803,8 @@ mod watch_tests {
     #[ignore]
     fn watch_and_merge_picks_up_an_external_change() {
         let dir = tempfile::tempdir().unwrap();
-        let vault_path = dir.path().join("local.vault");
-        let other_path = dir.path().join("other.vault");
+        let vault_path = dir.path().join("local.kdbx");
+        let other_path = dir.path().join("other.kdbx");
         let password = "watch_test_password_123";
 
         Vault::init(&vault_path, password).unwrap();
@@ -1227,7 +1223,7 @@ fn interactive_view(vault: &Vault) -> Result<()> {
     println!("{}: {}", "URL".bright_black(), entry.url);
     println!("{}: {}", "Username".bright_black(), entry.username.cyan());
     println!("{}: {}", "Password".bright_black(), entry.password().green().bold());
-    print_totp_line(entry);
+    print_totp_line(&entry);
     println!();
     println!("{}: {}", "Created".bright_black(),
              entry.created_at.format("%Y-%m-%d %H:%M").to_string().bright_black());

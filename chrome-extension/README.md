@@ -13,7 +13,7 @@ else.
 ## How it fits together
 
 ```
-popup.js / content.js  <-- chrome.runtime.sendNativeMessage -->  pass-native-host  <-->  passlib (vault file on disk)
+popup.js / content.js  <-- chrome.runtime.sendNativeMessage -->  pass-native-host  <-->  passlib (real .kdbx file on disk)
 ```
 
 Every popup action (unlock, list, get, add, update, delete, merge) is a
@@ -42,9 +42,10 @@ when the browser closes.
    *Developer mode*, click *Load unpacked*, and select the
    `chrome-extension/` directory.
 
-3. **Open the popup**, enter the path to your vault file (the same file
-   `pass` uses, e.g. `/home/you/passwords.vault`) and your master password,
-   and click **Unlock** (or **Create new vault** if it doesn't exist yet).
+3. **Open the popup**, enter the path to your vault file (the same real
+   KDBX4 file `pass`/KeePassXC use, e.g. `/home/you/passwords.kdbx`) and
+   your master password, and click **Unlock** (or **Create new vault** if
+   it doesn't exist yet).
 
 ## Using it
 
@@ -62,12 +63,11 @@ when the browser closes.
   <image>`) — the extension can't decode images itself.
 - The **Merge another vault copy** panel lets you point at a second copy of
   the vault file — e.g. the one synced into a local Nextcloud folder on this
-  machine — and merge it into the currently unlocked vault. This exercises
-  the same per-entry, revision-based merge used by `pass merge` on the CLI:
-  the newest edit to each entry wins, deletions propagate as tombstones,
-  and true conflicts (the same entry edited on two devices before either
-  saw the other's change) are resolved deterministically. See
-  `passlib/src/merge.rs` for the algorithm.
+  machine — and merge it into the currently unlocked vault. This is the
+  same underlying KDBX4 database merge used by `pass merge` on the CLI
+  (see the main README's "Cross-device merge" section): the newest edit to
+  each entry (by KDBX's own last-modification time) wins, and deletions
+  propagate via the Recycle Bin group.
 
 ## Limitations / not included here
 

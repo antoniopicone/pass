@@ -46,7 +46,7 @@ async function init() {
     }
   }
 
-  els.vaultPath.value = "passwords.vault";
+  els.vaultPath.value = "passwords.kdbx";
   showLocked();
 }
 
@@ -159,8 +159,8 @@ els.mergeBtn.addEventListener("click", async () => {
       otherPath,
     });
     setStatus(
-      `Merge done — added ${res.added}, updated ${res.updated}, ` +
-        `${res.conflicts} conflict(s) resolved.`
+      `Merge done — created ${res.created}, updated ${res.updated}, ` +
+        `${res.deleted} deleted.`
     );
     await refreshEntries();
     renderEntries();

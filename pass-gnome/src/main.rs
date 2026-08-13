@@ -268,8 +268,8 @@ fn build_ui(app: &adw::Application) {
                         }
                         drop(s);
                         ui.toasts.add_toast(adw::Toast::new(&format!(
-                            "Merged — added {}, updated {}, {} conflict(s) resolved",
-                            summary.added, summary.updated, summary.conflicts
+                            "Merged — created {}, updated {}, {} deleted",
+                            summary.created, summary.updated, summary.deleted
                         )));
                         refresh_list(&state, &ui);
                     }

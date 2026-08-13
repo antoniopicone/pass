@@ -1,10 +1,19 @@
 # Pass - Secure Password Manager
 
-A cross-platform password manager built with Rust, featuring zero-knowledge encryption and a command-line interface.
+A cross-platform password manager built with Rust, featuring zero-knowledge
+encryption and a command-line interface. The vault is a real **KDBX4**
+file — the native format used by [KeePass](https://keepass.info)/[KeePassXC](https://keepassxc.org)
+— so it opens directly in KeePassXC (and vice versa: a database created in
+KeePassXC opens directly in `pass`). `pass` isn't a KeePassXC plugin or
+fork; it's an independent, interoperable client for the same file format,
+verified in both directions against the real `keepassxc-cli`/KeePassXC
+binary (see "KDBX4 / KeePassXC compatibility" below).
 
 ## 🔐 Security Features
 
-- **AES-256-GCM Encryption**: Military-grade authenticated encryption
+- **KDBX4 format**: AES-256 outer encryption with HMAC-SHA256 block
+  authentication, ChaCha20 for protected in-memory fields — the same
+  construction KeePassXC itself uses
 - **Argon2id Key Derivation**: Memory-hard, GPU-resistant key derivation function
 - **Zero-Knowledge Architecture**: Master password never stored anywhere
 - **No Password Recovery**: If you forget your master password, your data cannot be recovered
@@ -17,9 +26,9 @@ A cross-platform password manager built with Rust, featuring zero-knowledge encr
 - **🔍 Powerful Search**: Find passwords by website name, username, or URL
 - **📋 Clean Interface**: Colorized output with intuitive navigation
 - **🔐 Traditional CLI**: Full command-line support for scripting and automation
-- **💾 Portable Vault**: Single encrypted file, easy to backup and sync
+- **💾 KeePassXC-compatible vault**: Single `.kdbx` file, openable directly in KeePassXC, easy to backup and sync
 - **🌍 Cross-Platform**: Works on macOS, Linux, and Windows
-- **🔢 Built-in MFA codes**: Store TOTP secrets (scan the QR code or paste the URI) and generate 2FA codes alongside each entry
+- **🔢 Built-in MFA codes**: Store TOTP secrets (scan the QR code or paste the URI) and generate 2FA codes alongside each entry, using the same `otp` field convention as KeePassXC
 
 ## 🚀 Installation
 
@@ -65,7 +74,7 @@ Master password: ********
 ║   Password Manager - Interactive Mode  ║
 ╚════════════════════════════════════════╝
 
-  Vault: passwords.vault
+  Vault: passwords.kdbx
   Status: Unlocked (3 entries)
 
 ────────────────────────────────────────────────────────────
@@ -93,7 +102,7 @@ For scripting or single operations, use the traditional CLI commands:
 pass init
 ```
 
-This creates a new encrypted vault file (`passwords.vault` by default) protected by your master password.
+This creates a new encrypted KDBX4 vault file (`passwords.kdbx` by default) protected by your master password.
 
 ### Add a Password Entry
 
@@ -141,32 +150,34 @@ pass delete <entry-id>
 
 ```bash
 # Use a different vault file
-pass --vault /path/to/my-vault.vault list
+pass --vault /path/to/my-vault.kdbx list
 ```
 
-## 🗄️ Vault File Format
+## 🗄️ KDBX4 / KeePassXC compatibility
 
-The vault file uses a custom binary format:
+The vault is a standard KDBX4 database (via the [`keepass`](https://crates.io/crates/keepass)
+Rust crate), not a custom format. Concretely, a [`PasswordEntry`](passlib/src/entry.rs) maps to:
 
-```
-┌─────────────────────────────────────┐
-│ Magic Bytes (4 bytes): "PSVT"      │
-├─────────────────────────────────────┤
-│ Version (4 bytes): u32              │
-├─────────────────────────────────────┤
-│ Salt (32 bytes): Random             │
-├─────────────────────────────────────┤
-│ Nonce (12 bytes): Random            │
-├─────────────────────────────────────┤
-│ Encrypted Data (variable)           │
-│ - JSON with password entries        │
-│ - AES-256-GCM encrypted             │
-├─────────────────────────────────────┤
-│ Auth Tag (16 bytes): GCM tag        │
-└─────────────────────────────────────┘
-```
+| `pass` field | KDBX4 entry field |
+|---|---|
+| website | `Title` |
+| url | `URL` |
+| username | `UserName` |
+| password | `Password` (protected) |
+| MFA/TOTP secret | `otp` (an `otpauth://` URI — the same field KeePassXC itself writes) |
+| deletion | moved into a `Recycle Bin` group, KeePassXC's own soft-delete convention |
 
-The encrypted JSON payload contains all password entries with metadata.
+This was verified against the real `keepassxc-cli` (KeePassXC 2.7), not
+just our own code, in both directions:
+- a vault created and populated entirely by `pass` (including an MFA
+  secret) opens in `keepassxc-cli`, lists correctly, and produces the
+  **exact same live TOTP code** as `pass totp show`
+- a database created entirely by `keepassxc-cli db-create`/`add` opens
+  and reads correctly in `pass`, password included
+
+Since it's a real KDBX4 file, anything that speaks the format works too —
+back it up, inspect it, or open it in the KeePassXC GUI/mobile apps
+whenever you want, independent of `pass` entirely.
 
 ## 🔢 MFA / TOTP codes
 
@@ -190,28 +201,29 @@ pass totp remove <entry-id>
 
 Codes are generated locally with the standard TOTP algorithm (RFC 6238,
 HMAC-SHA1/256/512), validated against the official RFC test vectors — the
-secret never leaves the vault. The TOTP secret is stored encrypted inside
-the same vault entry and participates in merge/sync like any other field
-(see below).
+secret never leaves the vault. The secret is stored in the entry's `otp`
+field (an `otpauth://` URI) using the exact convention KeePassXC uses, so
+a code set up in `pass` shows up correctly in KeePassXC's own TOTP button
+and vice versa.
 
 ## 🔀 Merging vaults across devices
 
-Every entry carries a `revision` counter (bumped on every edit or delete)
-and a `deleted_at` tombstone instead of being removed outright. That makes
-merging two independently-edited copies of a vault a simple, deterministic,
-order-independent operation — no shared sync history required, and it
-naturally supports deletions propagating like any other edit. See
-`passlib/src/merge.rs` for the algorithm and its tests.
+Cross-device sync is just [`keepass::Database::merge`](https://docs.rs/keepass) —
+the same database-merge logic KeePassXC itself ships — reconciling two
+independently-edited copies of the vault using each entry's KDBX
+last-modification timestamp, with deletions propagating via the Recycle
+Bin group rather than a custom tombstone scheme. No proprietary merge
+format, no shared sync history required.
 
 ```bash
 # Pull changes from another copy of the vault (e.g. synced via Nextcloud)
-pass merge /path/to/synced/passwords.vault
+pass merge /path/to/synced/passwords.kdbx
 
 # Or do it automatically: watch that copy and merge every time it changes
 # (e.g. because the Nextcloud client just synced it down from another
 # device), optionally publishing the merged result back to a shared path
 # so other devices can pick it up too.
-pass watch /path/to/synced/passwords.vault --publish /path/to/synced/passwords.vault
+pass watch /path/to/synced/passwords.kdbx --publish /path/to/synced/passwords.kdbx
 ```
 
 `pass watch` uses native filesystem events (inotify/FSEvents/ReadDirectoryChangesW
@@ -256,8 +268,8 @@ Apple Silicon, but no Xcode project exists yet.
 
 The project is organized as a Rust workspace with these packages:
 
-- **`passlib`**: Core library with encryption, vault management, the
-  cross-device merge algorithm, and TOTP/MFA code generation
+- **`passlib`**: Core library — KDBX4 vault storage (via the `keepass`
+  crate), cross-device merge, and TOTP/MFA code generation
 - **`passcli`**: Command-line interface application
 - **`passlib_ffi`**: C-compatible FFI bindings — init/unlock/CRUD, merge,
   and MFA/TOTP — for native apps (e.g. a future `pass-apple` SwiftUI app)
@@ -271,9 +283,9 @@ The project is organized as a Rust workspace with these packages:
 passlib/
 ├── src/
 │   ├── lib.rs      # Public API
-│   ├── crypto.rs   # Encryption primitives
-│   ├── vault.rs    # Vault management
+│   ├── vault.rs    # KDBX4 vault storage, CRUD, merge (via the `keepass` crate)
 │   ├── entry.rs    # Password entry data structures
+│   ├── totp.rs     # RFC 6238 TOTP + otpauth:// URI (de)serialization
 │   └── error.rs    # Error types
 └── Cargo.toml
 ```
@@ -303,7 +315,7 @@ cargo test -- --nocapture
 
 ✅ Data at rest encryption  
 ✅ Brute-force attacks (Argon2id is memory-hard)  
-✅ Tampering detection (GCM authentication)  
+✅ Tampering detection (KDBX4's HMAC-SHA256 block authentication)  
 ✅ GPU-based attacks (Argon2id resistant)  
 
 ### What This Does NOT Protect Against
@@ -345,6 +357,8 @@ Contributions are welcome! Please feel free to submit a Pull Request.
       a materially bigger project than the rest of this roadmap
 - [x] Browser extension (Chromium, local vault + merge — see `chrome-extension/`)
 - [x] File-watcher auto-merge (`pass watch`, see above)
+- [x] KDBX4 / KeePassXC-compatible vault format (verified against real
+      `keepassxc-cli` in both directions — see above)
 - [ ] Direct Nextcloud WebDAV client (today `pass watch` expects a
       filesystem-synced copy, e.g. from the Nextcloud desktop client)
 

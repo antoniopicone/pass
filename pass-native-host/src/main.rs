@@ -128,7 +128,7 @@ fn get_entry(req: &Value) -> Result<Value, String> {
 
     let vault = Vault::unlock(path, password).map_err(|e| e.to_string())?;
     let entry = vault.get_entry(id).map_err(|e| e.to_string())?;
-    Ok(json!({ "entry": entry_to_json(entry) }))
+    Ok(json!({ "entry": entry_to_json(&entry) }))
 }
 
 fn add_entry(req: &Value) -> Result<Value, String> {
@@ -213,10 +213,10 @@ fn merge_from_file(req: &Value) -> Result<Value, String> {
     vault.save(password).map_err(|e| e.to_string())?;
 
     Ok(json!({
-        "added": summary.added,
+        "created": summary.created,
         "updated": summary.updated,
         "unchanged": summary.unchanged,
-        "conflicts": summary.conflicts,
+        "deleted": summary.deleted,
     }))
 }
 

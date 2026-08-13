@@ -1,13 +1,20 @@
 use crate::totp::TotpConfig;
 use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use uuid::Uuid;
-use zeroize::Zeroize;
+use zeroize::Zeroizing;
 
-/// A password entry containing website credentials
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// A password entry containing website credentials.
+///
+/// This is a plain, owned snapshot — not a live view into the vault. Read
+/// it via [`crate::vault::Vault::get_entry`] /
+/// [`list_entries`][crate::vault::Vault::list_entries], and write changes
+/// back through [`crate::vault::Vault::add_entry`] /
+/// [`update_entry`][crate::vault::Vault::update_entry], which translate it
+/// to and from the underlying KDBX4 entry.
+#[derive(Debug, Clone)]
 pub struct PasswordEntry {
-    /// Unique identifier for this entry
+    /// Unique identifier for this entry (a UUID, matching the KDBX entry's UUID)
     pub id: String,
     /// Human-readable name/title for the website
     pub website: String,
@@ -15,28 +22,15 @@ pub struct PasswordEntry {
     pub url: String,
     /// Username or email address
     pub username: String,
-    /// Password (stored in memory, zeroized on drop)
-    #[serde(skip)]
-    password_data: String,
-    /// Serialized password for vault storage
-    #[serde(rename = "password")]
-    password_serialized: String,
+    /// Password, zeroized on drop
+    password: Zeroizing<String>,
     /// Creation timestamp
     pub created_at: DateTime<Utc>,
     /// Last modification timestamp
     pub updated_at: DateTime<Utc>,
-    /// Monotonically increasing per-entry edit counter. Bumped on every
-    /// edit (including deletion). Used to resolve merge conflicts between
-    /// devices deterministically, without depending on clock sync.
-    pub revision: u64,
-    /// Soft-delete marker. Deletions are tombstones rather than removals
-    /// so that a deletion made on one device can be merged into another
-    /// device's copy of the vault instead of silently failing to
-    /// propagate.
-    pub deleted_at: Option<DateTime<Utc>>,
-    /// Optional MFA/2FA secret (from a service's QR code) for generating
-    /// TOTP codes alongside this entry's password.
-    #[serde(default)]
+    /// Optional MFA/2FA secret (from a service's QR code), stored in the
+    /// KDBX entry's standard `otp` field — the same convention KeePassXC
+    /// itself uses, so a TOTP configured by either tool works in both.
     pub totp: Option<TotpConfig>,
 }
 
@@ -44,38 +38,52 @@ impl PasswordEntry {
     /// Create a new password entry
     pub fn new(website: String, url: String, username: String, password: String) -> Self {
         let now = Utc::now();
-        let password_clone = password.clone();
-        
         Self {
             id: Uuid::new_v4().to_string(),
             website,
             url,
             username,
-            password_data: password,
-            password_serialized: password_clone,
+            password: Zeroizing::new(password),
             created_at: now,
             updated_at: now,
-            revision: 1,
-            deleted_at: None,
             totp: None,
+        }
+    }
+
+    /// Reconstruct an entry snapshot from stored data (used when reading
+    /// back from the KDBX vault). Unlike [`PasswordEntry::new`], this does
+    /// not touch `created_at`/`updated_at` — they're taken as given.
+    pub(crate) fn from_parts(
+        id: String,
+        website: String,
+        url: String,
+        username: String,
+        password: String,
+        created_at: DateTime<Utc>,
+        updated_at: DateTime<Utc>,
+        totp: Option<TotpConfig>,
+    ) -> Self {
+        Self {
+            id,
+            website,
+            url,
+            username,
+            password: Zeroizing::new(password),
+            created_at,
+            updated_at,
+            totp,
         }
     }
 
     /// Get the password for this entry
     pub fn password(&self) -> &str {
-        if !self.password_data.is_empty() {
-            &self.password_data
-        } else {
-            &self.password_serialized
-        }
+        &self.password
     }
 
     /// Update the password
     pub fn set_password(&mut self, password: String) {
-        self.password_data.zeroize();
-        self.password_data = password.clone();
-        self.password_serialized = password;
-        self.touch();
+        self.password = Zeroizing::new(password);
+        self.updated_at = Utc::now();
     }
 
     /// Update metadata
@@ -94,76 +102,8 @@ impl PasswordEntry {
             changed = true;
         }
         if changed {
-            self.touch();
+            self.updated_at = Utc::now();
         }
-    }
-
-    /// Mark this entry as deleted without removing it from the list, so
-    /// the deletion itself can be merged into other copies of the vault
-    /// instead of silently failing to propagate to devices that haven't
-    /// seen it yet.
-    pub fn mark_deleted(&mut self) {
-        self.deleted_at = Some(Utc::now());
-        self.touch();
-    }
-
-    /// Whether this entry is a tombstone (soft-deleted).
-    pub fn is_deleted(&self) -> bool {
-        self.deleted_at.is_some()
-    }
-
-    /// Attach (or replace) the TOTP/MFA secret for this entry.
-    pub fn set_totp(&mut self, totp: TotpConfig) {
-        self.totp = Some(totp);
-        self.touch();
-    }
-
-    /// Remove the TOTP/MFA secret from this entry, if any.
-    pub fn clear_totp(&mut self) {
-        if self.totp.is_some() {
-            self.totp = None;
-            self.touch();
-        }
-    }
-
-    /// Bump the revision counter and refresh the modification timestamp.
-    /// Called on every edit, including deletion.
-    fn touch(&mut self) {
-        self.revision += 1;
-        self.updated_at = Utc::now();
-    }
-
-    /// Deterministic content signature used to break merge ties between
-    /// two copies of an entry that share the same revision number.
-    pub(crate) fn fingerprint(&self) -> String {
-        format!(
-            "{}|{}|{}|{}|{}|{}",
-            self.website,
-            self.url,
-            self.username,
-            self.password_serialized,
-            self.deleted_at.map(|d| d.to_rfc3339()).unwrap_or_default(),
-            self.totp.as_ref().map(TotpConfig::fingerprint).unwrap_or_default(),
-        )
-    }
-
-    /// Prepare entry for serialization
-    pub(crate) fn prepare_for_serialization(&mut self) {
-        if !self.password_data.is_empty() {
-            self.password_serialized = self.password_data.clone();
-        }
-    }
-
-    /// Restore entry after deserialization
-    pub(crate) fn restore_after_deserialization(&mut self) {
-        self.password_data = self.password_serialized.clone();
-    }
-}
-
-impl Drop for PasswordEntry {
-    fn drop(&mut self) {
-        self.password_data.zeroize();
-        self.password_serialized.zeroize();
     }
 }
 
