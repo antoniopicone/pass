@@ -179,12 +179,19 @@ naturally supports deletions propagating like any other edit. See
 ```bash
 # Pull changes from another copy of the vault (e.g. synced via Nextcloud)
 pass merge /path/to/synced/passwords.vault
+
+# Or do it automatically: watch that copy and merge every time it changes
+# (e.g. because the Nextcloud client just synced it down from another
+# device), optionally publishing the merged result back to a shared path
+# so other devices can pick it up too.
+pass watch /path/to/synced/passwords.vault --publish /path/to/synced/passwords.vault
 ```
 
-This is the building block for keeping the vault in sync across devices
-sharing a Nextcloud (or any file-sync) folder: point `merge` at the synced
-copy whenever it changes, then let the sync client push the merged result
-back out.
+`pass watch` uses native filesystem events (inotify/FSEvents/ReadDirectoryChangesW
+via the `notify` crate), debounces the burst of events a single atomic save
+produces, and re-merges automatically — this is the piece that turns the
+manual `pass merge` step into always-on sync across devices sharing a
+Nextcloud (or any file-sync) folder.
 
 ## 🌐 Chromium extension
 
@@ -278,7 +285,9 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 - [ ] TOTP 2FA support
 - [ ] Secure password sharing
 - [x] Browser extension (Chromium, local vault + merge — see `chrome-extension/`)
-- [ ] Direct Nextcloud (WebDAV) sync + file-watcher auto-merge
+- [x] File-watcher auto-merge (`pass watch`, see above)
+- [ ] Direct Nextcloud WebDAV client (today `pass watch` expects a
+      filesystem-synced copy, e.g. from the Nextcloud desktop client)
 
 ## ⚠️ Disclaimer
 

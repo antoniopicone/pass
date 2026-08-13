@@ -68,11 +68,17 @@ when the browser closes.
 This ships the vault access + merge-algorithm plumbing and a usable
 autofill UI. It does **not** include:
 
-- Talking to Nextcloud's WebDAV API directly, or watching the filesystem
-  for remote changes — today you merge on demand by pointing at a second
-  vault file path. Wiring that path to a live Nextcloud sync folder (or to
-  WebDAV directly) with a file-watcher-triggered auto-merge is a natural
-  next step, not implemented yet.
+- Talking to Nextcloud's WebDAV API directly — this assumes a filesystem
+  sync client (e.g. the Nextcloud desktop app) already keeps a copy of the
+  vault up to date locally.
+- Automatic merging from the extension itself. The CLI now has this
+  (`pass watch <other-vault> --publish <path>`, see the main README) using
+  real filesystem events, but wiring the same auto-merge into the browser
+  (so the popup refreshes itself when another device's changes land)
+  would need a persistent connection from the extension to the native
+  host, which is awkward under Manifest V3's service worker lifecycle —
+  not implemented here. Today you trigger the merge on demand from the
+  popup's **Merge** panel, or just run `pass watch` alongside it.
 - Extension icons (Chrome falls back to a generic icon).
 - Packaging/signing for the Chrome Web Store — this is meant to be loaded
   unpacked for personal use.
