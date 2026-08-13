@@ -11,3 +11,4 @@ crate-type = ["staticlib", "cdylib"]
 [dependencies]
 passlib = { path = "../passlib" }
 libc = "0.2"
+chrono.workspace = true

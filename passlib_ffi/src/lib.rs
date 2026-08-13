@@ -32,6 +32,9 @@ pub struct CPasswordEntry {
     pub password: *mut c_char,
     pub created_at: i64,      // Unix timestamp
     pub updated_at: i64,      // Unix timestamp
+    pub has_totp: bool,
+    pub totp_code: *mut c_char,       // NULL unless has_totp is true
+    pub totp_seconds_remaining: i64,  // -1 unless has_totp is true
 }
 
 /// C-compatible list of password entries
@@ -191,6 +194,39 @@ pub unsafe extern "C" fn vault_add_entry(
     }
 }
 
+// Build a CPasswordEntry, including the current TOTP code if the entry has
+// an MFA secret attached. Shared by vault_list_entries and vault_get_entry
+// so both surface the same fields the same way.
+fn build_c_entry(entry: &PasswordEntry) -> CPasswordEntry {
+    let (has_totp, totp_code, totp_seconds_remaining) = match &entry.totp {
+        Some(totp) => {
+            let now = chrono::Utc::now();
+            match passlib::totp::generate_code(totp, now) {
+                Ok(code) => (
+                    true,
+                    to_c_string(&code),
+                    passlib::totp::seconds_remaining(totp, now) as i64,
+                ),
+                Err(_) => (true, std::ptr::null_mut(), -1),
+            }
+        }
+        None => (false, std::ptr::null_mut(), -1),
+    };
+
+    CPasswordEntry {
+        id: to_c_string(&entry.id),
+        website: to_c_string(&entry.website),
+        url: to_c_string(&entry.url),
+        username: to_c_string(&entry.username),
+        password: to_c_string(entry.password()),
+        created_at: entry.created_at.timestamp(),
+        updated_at: entry.updated_at.timestamp(),
+        has_totp,
+        totp_code,
+        totp_seconds_remaining,
+    }
+}
+
 /// List all password entries
 ///
 /// # Safety
@@ -219,15 +255,7 @@ pub unsafe extern "C" fn vault_list_entries(
             for summary in entries {
                 // Get full entry to access password
                 if let Ok(entry) = vault_ref.get_entry(&summary.id) {
-                    c_entries.push(CPasswordEntry {
-                        id: to_c_string(&entry.id),
-                        website: to_c_string(&entry.website),
-                        url: to_c_string(&entry.url),
-                        username: to_c_string(&entry.username),
-                        password: to_c_string(entry.password()),
-                        created_at: entry.created_at.timestamp(),
-                        updated_at: entry.updated_at.timestamp(),
-                    });
+                    c_entries.push(build_c_entry(entry));
                 }
             }
 
@@ -272,15 +300,7 @@ pub unsafe extern "C" fn vault_get_entry(
 
     match vault_ref.get_entry(&id_str) {
         Ok(entry) => {
-            let c_entry = Box::new(CPasswordEntry {
-                id: to_c_string(&entry.id),
-                website: to_c_string(&entry.website),
-                url: to_c_string(&entry.url),
-                username: to_c_string(&entry.username),
-                password: to_c_string(entry.password()),
-                created_at: entry.created_at.timestamp(),
-                updated_at: entry.updated_at.timestamp(),
-            });
+            let c_entry = Box::new(build_c_entry(entry));
             *entry_out = Box::into_raw(c_entry);
             PassResult::Success
         }
@@ -394,6 +414,147 @@ pub unsafe extern "C" fn vault_delete_entry(
     }
 }
 
+/// Attach an MFA/TOTP secret to an entry, parsed from an otpauth:// URI
+/// (the kind encoded by a service's 2FA setup QR code). Decoding a QR
+/// code image into that URI is left to the caller (e.g. via a
+/// platform-native image/QR library); this only handles the URI itself.
+///
+/// # Safety
+/// - vault must be a valid CVault pointer
+/// - id and otpauth_uri must be valid C strings
+#[no_mangle]
+pub unsafe extern "C" fn vault_set_entry_totp_uri(
+    vault: *mut CVault,
+    id: *const c_char,
+    otpauth_uri: *const c_char,
+) -> PassResult {
+    if vault.is_null() {
+        return PassResult::ErrorInvalidInput;
+    }
+
+    let cvault = &mut *vault;
+    let vault_ref = match cvault.vault.as_mut() {
+        Some(v) => v,
+        None => return PassResult::ErrorUnknown,
+    };
+
+    let id_str = match from_c_string(id) {
+        Ok(s) => s,
+        Err(e) => return e,
+    };
+    let uri_str = match from_c_string(otpauth_uri) {
+        Ok(s) => s,
+        Err(e) => return e,
+    };
+
+    let totp = match passlib::totp::parse_otpauth_uri(&uri_str) {
+        Ok(t) => t,
+        Err(_) => return PassResult::ErrorInvalidInput,
+    };
+
+    match vault_ref.set_entry_totp(&id_str, totp) {
+        Ok(_) => {
+            if vault_ref.save(&cvault.master_password).is_err() {
+                return PassResult::ErrorUnknown;
+            }
+            PassResult::Success
+        }
+        Err(passlib::PassError::EntryNotFound(_)) => PassResult::ErrorEntryNotFound,
+        Err(_) => PassResult::ErrorUnknown,
+    }
+}
+
+/// Remove the MFA/TOTP secret from an entry, if any
+///
+/// # Safety
+/// - vault must be a valid CVault pointer
+/// - id must be a valid C string
+#[no_mangle]
+pub unsafe extern "C" fn vault_clear_entry_totp(vault: *mut CVault, id: *const c_char) -> PassResult {
+    if vault.is_null() {
+        return PassResult::ErrorInvalidInput;
+    }
+
+    let cvault = &mut *vault;
+    let vault_ref = match cvault.vault.as_mut() {
+        Some(v) => v,
+        None => return PassResult::ErrorUnknown,
+    };
+
+    let id_str = match from_c_string(id) {
+        Ok(s) => s,
+        Err(e) => return e,
+    };
+
+    match vault_ref.clear_entry_totp(&id_str) {
+        Ok(_) => {
+            if vault_ref.save(&cvault.master_password).is_err() {
+                return PassResult::ErrorUnknown;
+            }
+            PassResult::Success
+        }
+        Err(passlib::PassError::EntryNotFound(_)) => PassResult::ErrorEntryNotFound,
+        Err(_) => PassResult::ErrorUnknown,
+    }
+}
+
+/// Merge another copy of this vault (e.g. one synced via Nextcloud) into
+/// the currently open vault and save the result. `*_out` parameters may be
+/// NULL if the caller doesn't need the merge counts.
+///
+/// # Safety
+/// - vault must be a valid CVault pointer
+/// - other_path must be a valid C string
+/// - each non-NULL `*_out` pointer must be a valid `size_t` pointer
+#[no_mangle]
+pub unsafe extern "C" fn vault_merge_from_file(
+    vault: *mut CVault,
+    other_path: *const c_char,
+    added_out: *mut size_t,
+    updated_out: *mut size_t,
+    unchanged_out: *mut size_t,
+    conflicts_out: *mut size_t,
+) -> PassResult {
+    if vault.is_null() {
+        return PassResult::ErrorInvalidInput;
+    }
+
+    let cvault = &mut *vault;
+    let vault_ref = match cvault.vault.as_mut() {
+        Some(v) => v,
+        None => return PassResult::ErrorUnknown,
+    };
+
+    let other_path_str = match from_c_string(other_path) {
+        Ok(s) => s,
+        Err(e) => return e,
+    };
+
+    match vault_ref.merge_from_file(&other_path_str, &cvault.master_password) {
+        Ok(summary) => {
+            if vault_ref.save(&cvault.master_password).is_err() {
+                return PassResult::ErrorUnknown;
+            }
+            if !added_out.is_null() {
+                *added_out = summary.added;
+            }
+            if !updated_out.is_null() {
+                *updated_out = summary.updated;
+            }
+            if !unchanged_out.is_null() {
+                *unchanged_out = summary.unchanged;
+            }
+            if !conflicts_out.is_null() {
+                *conflicts_out = summary.conflicts;
+            }
+            PassResult::Success
+        }
+        Err(passlib::PassError::VaultNotFound(_)) => PassResult::ErrorVaultNotFound,
+        Err(passlib::PassError::InvalidPassword) => PassResult::ErrorInvalidPassword,
+        Err(_) => PassResult::ErrorUnknown,
+    }
+}
+
 /// Free a vault instance
 ///
 /// # Safety
@@ -429,6 +590,7 @@ pub unsafe extern "C" fn entry_free(entry: *mut CPasswordEntry) {
         string_free(entry.url);
         string_free(entry.username);
         string_free(entry.password);
+        string_free(entry.totp_code);
     }
 }
 
@@ -448,6 +610,7 @@ pub unsafe extern "C" fn entry_list_free(list: *mut CPasswordEntryList) {
                 string_free(entry.url);
                 string_free(entry.username);
                 string_free(entry.password);
+                string_free(entry.totp_code);
             }
             Vec::from_raw_parts(list.entries, list.count, list.count);
         }

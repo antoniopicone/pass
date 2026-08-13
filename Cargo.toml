@@ -1,5 +1,5 @@
 [workspace]
-members = ["passlib", "passcli", "passlib_ffi", "pass-native-host"]
+members = ["passlib", "passcli", "passlib_ffi", "pass-native-host", "pass-gnome"]
 resolver = "2"
 
 [workspace.package]

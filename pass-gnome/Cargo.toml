@@ -1,0 +1,19 @@
+[package]
+name = "pass-gnome"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "pass-gnome"
+path = "src/main.rs"
+
+[dependencies]
+passlib = { path = "../passlib" }
+gtk4 = { version = "0.9", package = "gtk4", features = ["v4_12"] }
+libadwaita = { version = "0.7", features = ["v1_5"] }
+glib = "0.20"
+image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "gif", "bmp", "webp"] }
+rqrr = "0.10.1"
+chrono = { workspace = true }

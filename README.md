@@ -228,16 +228,42 @@ popup. It talks to the vault through a small native messaging host
 (`pass-native-host`) rather than over the network. See
 `chrome-extension/README.md` for setup.
 
+## 🐧 GNOME app
+
+`pass-gnome` is a native GTK4/libadwaita desktop app (Rust, using `passlib`
+directly — no FFI hop needed since both are Rust). It covers the same core
+flows as the CLI: unlock/create a vault, search entries, reveal/copy
+password and MFA code with a live countdown, add/edit/delete, attach an MFA
+secret by pasting an `otpauth://` URI or picking a QR code image, and merge
+in another vault copy from the header menu.
+
+```bash
+cargo run --release -p pass-gnome
+```
+
+Requires GTK4 ≥ 4.12 and libadwaita ≥ 1.5 development packages installed
+(e.g. `libgtk-4-dev libadwaita-1-dev` on Debian/Ubuntu) to build.
+
+## 🍎 macOS / iOS
+
+Not built yet. `passlib_ffi` (below) now exposes cross-device merge and
+MFA/TOTP alongside the original CRUD operations, so a SwiftUI app under
+`pass-apple/` (currently an empty placeholder) has what it needs to reach
+feature parity with the CLI — `build-macos.sh` compiles the FFI library for
+Apple Silicon, but no Xcode project exists yet.
+
 ## 🏗️ Architecture
 
 The project is organized as a Rust workspace with these packages:
 
-- **`passlib`**: Core library with encryption, vault management, and the
-  cross-device merge algorithm
+- **`passlib`**: Core library with encryption, vault management, the
+  cross-device merge algorithm, and TOTP/MFA code generation
 - **`passcli`**: Command-line interface application
-- **`passlib_ffi`**: C-compatible FFI bindings (used by native apps, e.g. `pass-apple`)
+- **`passlib_ffi`**: C-compatible FFI bindings — init/unlock/CRUD, merge,
+  and MFA/TOTP — for native apps (e.g. a future `pass-apple` SwiftUI app)
 - **`pass-native-host`**: Native messaging host bridging the Chromium
   extension to `passlib`
+- **`pass-gnome`**: Native GTK4/libadwaita desktop app for Linux
 
 ### Library Structure
 
@@ -305,7 +331,9 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 
 - [x] Core encryption library
 - [x] CLI application 
-- [ ] GUI application (Tauri)
+- [x] GUI application (GNOME/GTK4 — see `pass-gnome/`; a Tauri app was the
+      original idea but a native GTK4/libadwaita app fit better on Linux)
+- [ ] macOS app (SwiftUI) — `passlib_ffi` now has what it needs (merge, MFA)
 - [ ] iOS/iPadOS support
 - [ ] Password generator
 - [ ] Clipboard integration with auto-clear
