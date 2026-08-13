@@ -270,6 +270,38 @@ impl Vault {
         Ok(())
     }
 
+    /// Attach (or replace) the TOTP/MFA secret for an entry
+    pub fn set_entry_totp(&mut self, id: &str, totp: crate::totp::TotpConfig) -> Result<()> {
+        if !self.is_unlocked {
+            return Err(PassError::CryptoError("Vault is locked".to_string()));
+        }
+
+        let entry = self
+            .entries
+            .iter_mut()
+            .find(|e| e.id == id && !e.is_deleted())
+            .ok_or_else(|| PassError::EntryNotFound(id.to_string()))?;
+
+        entry.set_totp(totp);
+        Ok(())
+    }
+
+    /// Remove the TOTP/MFA secret from an entry, if any
+    pub fn clear_entry_totp(&mut self, id: &str) -> Result<()> {
+        if !self.is_unlocked {
+            return Err(PassError::CryptoError("Vault is locked".to_string()));
+        }
+
+        let entry = self
+            .entries
+            .iter_mut()
+            .find(|e| e.id == id && !e.is_deleted())
+            .ok_or_else(|| PassError::EntryNotFound(id.to_string()))?;
+
+        entry.clear_totp();
+        Ok(())
+    }
+
     /// Get the vault file path
     pub fn path(&self) -> &Path {
         &self.path

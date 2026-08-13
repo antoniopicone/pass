@@ -10,6 +10,7 @@ name = "pass-native-host"
 path = "src/main.rs"
 
 [dependencies]
+chrono.workspace = true
 passlib = { path = "../passlib" }
 serde = { workspace = true }
 serde_json = { workspace = true }

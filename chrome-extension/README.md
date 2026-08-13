@@ -54,6 +54,12 @@ when the browser closes.
   content script, which fills the best-guess login fields on the page. It
   never submits the form.
 - **Copy** copies the password to the clipboard.
+- Entries with an MFA secret attached show a 🔐 marker and an **MFA**
+  button that copies the current TOTP code to the clipboard. Entries
+  without one show **+MFA**, which prompts for an `otpauth://` URI (from
+  a service's "can't scan the code?" manual-entry link) and attaches it.
+  Reading a QR code image directly is CLI-only today (`pass totp add --qr
+  <image>`) — the extension can't decode images itself.
 - The **Merge another vault copy** panel lets you point at a second copy of
   the vault file — e.g. the one synced into a local Nextcloud folder on this
   machine — and merge it into the currently unlocked vault. This exercises

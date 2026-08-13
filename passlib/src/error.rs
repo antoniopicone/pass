@@ -25,6 +25,9 @@ pub enum PassError {
 
     #[error("Invalid vault format or version")]
     InvalidVaultFormat,
+
+    #[error("TOTP error: {0}")]
+    TotpError(String),
 }
 
 pub type Result<T> = std::result::Result<T, PassError>;

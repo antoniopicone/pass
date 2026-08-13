@@ -19,6 +19,7 @@ A cross-platform password manager built with Rust, featuring zero-knowledge encr
 - **🔐 Traditional CLI**: Full command-line support for scripting and automation
 - **💾 Portable Vault**: Single encrypted file, easy to backup and sync
 - **🌍 Cross-Platform**: Works on macOS, Linux, and Windows
+- **🔢 Built-in MFA codes**: Store TOTP secrets (scan the QR code or paste the URI) and generate 2FA codes alongside each entry
 
 ## 🚀 Installation
 
@@ -167,6 +168,32 @@ The vault file uses a custom binary format:
 
 The encrypted JSON payload contains all password entries with metadata.
 
+## 🔢 MFA / TOTP codes
+
+Attach a service's 2FA secret to an entry by scanning the QR code it shows
+you during MFA setup (or by pasting the `otpauth://` URI directly), and
+`pass` will generate the current 6-digit code on demand — no separate
+authenticator app needed.
+
+```bash
+# Scan a QR code you saved as an image (PNG/JPEG/GIF/BMP/WebP)
+pass totp add <entry-id> --qr ~/Downloads/github-2fa-qrcode.png
+
+# Or paste the otpauth:// URI directly (e.g. from a "can't scan?" link)
+pass totp add <entry-id> --uri "otpauth://totp/GitHub:me@example.com?secret=...&issuer=GitHub"
+
+# Show the current code (also shown automatically by `pass get` and interactive view)
+pass totp show <entry-id-or-website>
+
+pass totp remove <entry-id>
+```
+
+Codes are generated locally with the standard TOTP algorithm (RFC 6238,
+HMAC-SHA1/256/512), validated against the official RFC test vectors — the
+secret never leaves the vault. The TOTP secret is stored encrypted inside
+the same vault entry and participates in merge/sync like any other field
+(see below).
+
 ## 🔀 Merging vaults across devices
 
 Every entry carries a `revision` counter (bumped on every edit or delete)
@@ -282,8 +309,12 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 - [ ] iOS/iPadOS support
 - [ ] Password generator
 - [ ] Clipboard integration with auto-clear
-- [ ] TOTP 2FA support
+- [x] TOTP 2FA support (`pass totp`, QR code or URI — see above)
 - [ ] Secure password sharing
+- [ ] Passkey (WebAuthn/FIDO2) support — storing passkey metadata for
+      record-keeping is feasible; acting as a real authenticator the
+      browser invokes during login needs OS-level CTAP2 integration and is
+      a materially bigger project than the rest of this roadmap
 - [x] Browser extension (Chromium, local vault + merge — see `chrome-extension/`)
 - [x] File-watcher auto-merge (`pass watch`, see above)
 - [ ] Direct Nextcloud WebDAV client (today `pass watch` expects a

@@ -60,6 +60,12 @@ enum Commands {
         other: PathBuf,
     },
 
+    /// Manage TOTP/MFA codes for an entry
+    Totp {
+        #[command(subcommand)]
+        action: TotpAction,
+    },
+
     /// Watch another vault copy (e.g. synced via Nextcloud) and automatically
     /// merge changes into this vault as they appear
     Watch {
@@ -81,6 +87,36 @@ enum Commands {
     Interactive,
 }
 
+#[derive(Subcommand)]
+enum TotpAction {
+    /// Attach an MFA secret to an entry, either by scanning a QR code image
+    /// exported from the service's 2FA setup page or from an otpauth:// URI
+    Add {
+        /// Entry ID to attach the MFA secret to
+        id: String,
+
+        /// Path to a QR code image (PNG/JPEG/GIF/BMP/WebP)
+        #[arg(long, conflicts_with = "uri")]
+        qr: Option<PathBuf>,
+
+        /// otpauth://totp/... URI, as an alternative to --qr
+        #[arg(long, conflicts_with = "qr")]
+        uri: Option<String>,
+    },
+
+    /// Show the current MFA code for an entry
+    Show {
+        /// Entry ID or search term
+        query: String,
+    },
+
+    /// Remove the MFA secret from an entry
+    Remove {
+        /// Entry ID to remove the MFA secret from
+        id: String,
+    },
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
@@ -92,6 +128,7 @@ fn main() -> Result<()> {
         Commands::Delete { id } => cmd_delete(&cli.vault, &id),
         Commands::Update { id } => cmd_update(&cli.vault, &id),
         Commands::Merge { other } => cmd_merge(&cli.vault, &other),
+        Commands::Totp { action } => cmd_totp(&cli.vault, action),
         Commands::Watch {
             other,
             publish,
@@ -220,23 +257,47 @@ fn cmd_list(vault_path: &PathBuf) -> Result<()> {
     Ok(())
 }
 
+/// Find an entry by ID, falling back to a case-insensitive website search
+fn find_entry<'a>(vault: &'a Vault, query: &str) -> Result<&'a PasswordEntry> {
+    vault
+        .get_entry(query)
+        .or_else(|_| {
+            let entries = vault.list_entries()?;
+            let found = entries
+                .iter()
+                .find(|e| e.website.to_lowercase().contains(&query.to_lowercase()))
+                .ok_or_else(|| passlib::PassError::EntryNotFound(query.to_string()))?;
+            vault.get_entry(&found.id)
+        })
+        .context(format!("Entry not found: {}", query))
+}
+
+/// Print the current TOTP code and remaining seconds for an entry, if any
+fn print_totp_line(entry: &PasswordEntry) {
+    if let Some(totp) = &entry.totp {
+        let now = chrono::Utc::now();
+        match passlib::totp::generate_code(totp, now) {
+            Ok(code) => {
+                let remaining = passlib::totp::seconds_remaining(totp, now);
+                println!(
+                    "{}: {} {}",
+                    "MFA code".bold(),
+                    code.green().bold(),
+                    format!("(expires in {}s)", remaining).bright_black()
+                );
+            }
+            Err(e) => println!("{}: {}", "MFA code".bold(), format!("error: {}", e).red()),
+        }
+    }
+}
+
 /// Get a specific password entry
 fn cmd_get(vault_path: &PathBuf, query: &str) -> Result<()> {
     let master_password = prompt_master_password()?;
     let vault = Vault::unlock(vault_path, &master_password)
         .context("Failed to unlock vault (wrong password?)")?;
 
-    // Try to find by ID first, then by website name
-    let entry = vault.get_entry(query)
-        .or_else(|_| {
-            // Search by website name
-            let entries = vault.list_entries()?;
-            let found = entries.iter()
-                .find(|e| e.website.to_lowercase().contains(&query.to_lowercase()))
-                .ok_or_else(|| passlib::PassError::EntryNotFound(query.to_string()))?;
-            vault.get_entry(&found.id)
-        })
-        .context(format!("Entry not found: {}", query))?;
+    let entry = find_entry(&vault, query)?;
 
     println!();
     println!("{}", "🔑 Password Entry".bold().cyan());
@@ -246,10 +307,11 @@ fn cmd_get(vault_path: &PathBuf, query: &str) -> Result<()> {
     println!("{}: {}", "URL".bold(), entry.url);
     println!("{}: {}", "Username".bold(), entry.username);
     println!("{}: {}", "Password".bold().green(), entry.password().green());
+    print_totp_line(entry);
     println!("{}: {}", "ID".bright_black(), entry.id.bright_black());
-    println!("{}: {}", "Created".bright_black(), 
+    println!("{}: {}", "Created".bright_black(),
              entry.created_at.format("%Y-%m-%d %H:%M").to_string().bright_black());
-    println!("{}: {}", "Updated".bright_black(), 
+    println!("{}: {}", "Updated".bright_black(),
              entry.updated_at.format("%Y-%m-%d %H:%M").to_string().bright_black());
     println!("{}", "─".repeat(60).bright_black());
     println!();
@@ -401,6 +463,129 @@ fn cmd_merge(vault_path: &PathBuf, other_path: &PathBuf) -> Result<()> {
             .yellow()
         );
     }
+    println!();
+
+    Ok(())
+}
+
+/// Manage the TOTP/MFA secret attached to an entry
+fn cmd_totp(vault_path: &PathBuf, action: TotpAction) -> Result<()> {
+    match action {
+        TotpAction::Add { id, qr, uri } => cmd_totp_add(vault_path, &id, &qr, &uri),
+        TotpAction::Show { query } => cmd_totp_show(vault_path, &query),
+        TotpAction::Remove { id } => cmd_totp_remove(vault_path, &id),
+    }
+}
+
+/// Decode the first QR code found in an image file into its raw text content
+fn decode_qr_image(path: &Path) -> Result<String> {
+    let img = image::open(path)
+        .with_context(|| format!("Failed to open image: {}", path.display()))?
+        .to_luma8();
+
+    let mut prepared = rqrr::PreparedImage::prepare(img);
+    let grids = prepared.detect_grids();
+    let grid = grids
+        .first()
+        .ok_or_else(|| anyhow::anyhow!("No QR code found in {}", path.display()))?;
+
+    let (_meta, content) = grid
+        .decode()
+        .with_context(|| format!("Failed to decode QR code in {}", path.display()))?;
+
+    Ok(content)
+}
+
+/// Attach an MFA secret to an entry, from a QR code image or a raw otpauth URI
+fn cmd_totp_add(vault_path: &PathBuf, id: &str, qr: &Option<PathBuf>, uri: &Option<String>) -> Result<()> {
+    println!("{}", "📷 Add MFA Code".bold().cyan());
+    println!();
+
+    let otpauth_uri = match (qr, uri) {
+        (Some(path), None) => {
+            println!("Reading QR code from {}…", path.display());
+            decode_qr_image(path)?
+        }
+        (None, Some(uri)) => uri.clone(),
+        _ => anyhow::bail!("Provide exactly one of --qr <image> or --uri <otpauth-uri>"),
+    };
+
+    let totp = passlib::totp::parse_otpauth_uri(&otpauth_uri)
+        .context("Failed to parse the otpauth URI (is this a TOTP QR code?)")?;
+
+    let master_password = prompt_master_password()?;
+    let mut vault = Vault::unlock(vault_path, &master_password)
+        .context("Failed to unlock vault (wrong password?)")?;
+
+    let website = vault
+        .get_entry(id)
+        .context(format!("Entry not found: {}", id))?
+        .website
+        .clone();
+
+    vault.set_entry_totp(id, totp.clone())
+        .context("Failed to attach MFA secret")?;
+    vault.save(&master_password)
+        .context("Failed to save vault")?;
+
+    println!();
+    println!("{}", format!("✅ MFA code added to '{}'.", website).green().bold());
+    if let Some(issuer) = &totp.issuer {
+        println!("   Issuer: {}", issuer);
+    }
+    println!("   {} digits, every {}s, {:?}", totp.digits, totp.period, totp.algorithm);
+    println!();
+
+    Ok(())
+}
+
+/// Show the current MFA code for an entry
+fn cmd_totp_show(vault_path: &PathBuf, query: &str) -> Result<()> {
+    let master_password = prompt_master_password()?;
+    let vault = Vault::unlock(vault_path, &master_password)
+        .context("Failed to unlock vault (wrong password?)")?;
+
+    let entry = find_entry(&vault, query)?;
+    let totp = entry
+        .totp
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("'{}' has no MFA code configured. Add one with: pass totp add", entry.website))?;
+
+    let now = chrono::Utc::now();
+    let code = passlib::totp::generate_code(totp, now).context("Failed to generate MFA code")?;
+    let remaining = passlib::totp::seconds_remaining(totp, now);
+
+    println!();
+    println!("{}", "🔢 MFA Code".bold().cyan());
+    println!("{}", "─".repeat(40).bright_black());
+    println!("{}: {}", "Website".bold(), entry.website);
+    println!("{}: {}", "Code".bold().green(), code.green().bold());
+    println!("{}: {}s", "Expires in".bright_black(), remaining);
+    println!("{}", "─".repeat(40).bright_black());
+    println!();
+
+    Ok(())
+}
+
+/// Remove the MFA secret from an entry
+fn cmd_totp_remove(vault_path: &PathBuf, id: &str) -> Result<()> {
+    let master_password = prompt_master_password()?;
+    let mut vault = Vault::unlock(vault_path, &master_password)
+        .context("Failed to unlock vault (wrong password?)")?;
+
+    let website = vault
+        .get_entry(id)
+        .context(format!("Entry not found: {}", id))?
+        .website
+        .clone();
+
+    vault.clear_entry_totp(id)
+        .context("Failed to remove MFA secret")?;
+    vault.save(&master_password)
+        .context("Failed to save vault")?;
+
+    println!();
+    println!("{}", format!("✅ MFA code removed from '{}'.", website).green().bold());
     println!();
 
     Ok(())
@@ -566,6 +751,30 @@ fn prompt_master_password() -> Result<String> {
         .with_prompt("Master password")
         .interact()
         .context("Failed to read master password")
+}
+
+#[cfg(test)]
+mod totp_tests {
+    use super::*;
+
+    /// testdata/totp_qr.png encodes this exact otpauth URI (generated with
+    /// Python's `qrcode` library) — a real QR image end to end, not just
+    /// the URI parser.
+    #[test]
+    fn decode_qr_image_reads_the_encoded_otpauth_uri() {
+        let path = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/testdata/totp_qr.png"));
+        let content = decode_qr_image(path).unwrap();
+
+        assert_eq!(
+            content,
+            "otpauth://totp/GitHub:me%40example.com?secret=JBSWY3DPEHPK3PXP&issuer=GitHub&algorithm=SHA1&digits=6&period=30"
+        );
+
+        let totp = passlib::totp::parse_otpauth_uri(&content).unwrap();
+        assert_eq!(totp.secret, "JBSWY3DPEHPK3PXP");
+        assert_eq!(totp.issuer.as_deref(), Some("GitHub"));
+        assert_eq!(totp.account.as_deref(), Some("me@example.com"));
+    }
 }
 
 #[cfg(test)]
@@ -1018,8 +1227,9 @@ fn interactive_view(vault: &Vault) -> Result<()> {
     println!("{}: {}", "URL".bright_black(), entry.url);
     println!("{}: {}", "Username".bright_black(), entry.username.cyan());
     println!("{}: {}", "Password".bright_black(), entry.password().green().bold());
+    print_totp_line(entry);
     println!();
-    println!("{}: {}", "Created".bright_black(), 
+    println!("{}: {}", "Created".bright_black(),
              entry.created_at.format("%Y-%m-%d %H:%M").to_string().bright_black());
     println!("{}: {}", "Updated".bright_black(), 
              entry.updated_at.format("%Y-%m-%d %H:%M").to_string().bright_black());

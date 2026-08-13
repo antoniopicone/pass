@@ -209,7 +209,7 @@ function renderEntries() {
     const info = document.createElement("div");
     info.className = "entry-info";
     const strong = document.createElement("strong");
-    strong.textContent = entry.website;
+    strong.textContent = entry.website + (entry.hasTotp ? " 🔐" : "");
     const span = document.createElement("span");
     span.textContent = entry.username;
     info.append(strong, span);
@@ -227,6 +227,20 @@ function renderEntries() {
     copyBtn.addEventListener("click", () => copyPassword(entry.id));
 
     actions.append(fillBtn, copyBtn);
+
+    const mfaBtn = document.createElement("button");
+    mfaBtn.className = "secondary";
+    if (entry.hasTotp) {
+      mfaBtn.textContent = "MFA";
+      mfaBtn.title = "Copy the current MFA code";
+      mfaBtn.addEventListener("click", () => copyTotpCode(entry.id));
+    } else {
+      mfaBtn.textContent = "+MFA";
+      mfaBtn.title = "Attach an MFA/TOTP secret (paste the otpauth:// URI)";
+      mfaBtn.addEventListener("click", () => addTotp(entry.id));
+    }
+    actions.append(mfaBtn);
+
     li.append(info, actions);
     els.entryList.appendChild(li);
   }
@@ -264,6 +278,50 @@ async function copyPassword(id) {
     });
     await navigator.clipboard.writeText(res.entry.password);
     setStatus("Password copied to clipboard.");
+  } catch (e) {
+    setStatus(e.message, true);
+  }
+}
+
+async function copyTotpCode(id) {
+  setStatus("Fetching MFA code…");
+  try {
+    const res = await sendNative({
+      cmd: "getEntry",
+      vaultPath: session.vaultPath,
+      masterPassword: session.masterPassword,
+      id,
+    });
+    if (!res.entry.totp) {
+      setStatus("No MFA code configured for this entry.", true);
+      return;
+    }
+    await navigator.clipboard.writeText(res.entry.totp.code);
+    setStatus(`MFA code copied (expires in ${res.entry.totp.secondsRemaining}s).`);
+  } catch (e) {
+    setStatus(e.message, true);
+  }
+}
+
+async function addTotp(id) {
+  const uri = window.prompt(
+    "Paste the otpauth:// URI from the service's MFA setup page " +
+      '(usually behind a "can\'t scan the code?" / manual entry link):'
+  );
+  if (!uri) return;
+
+  setStatus("Adding MFA code…");
+  try {
+    await sendNative({
+      cmd: "addTotpUri",
+      vaultPath: session.vaultPath,
+      masterPassword: session.masterPassword,
+      id,
+      uri,
+    });
+    setStatus("MFA code added.");
+    await refreshEntries();
+    renderEntries();
   } catch (e) {
     setStatus(e.message, true);
   }

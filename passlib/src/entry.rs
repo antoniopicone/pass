@@ -1,3 +1,4 @@
+use crate::totp::TotpConfig;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -33,6 +34,10 @@ pub struct PasswordEntry {
     /// device's copy of the vault instead of silently failing to
     /// propagate.
     pub deleted_at: Option<DateTime<Utc>>,
+    /// Optional MFA/2FA secret (from a service's QR code) for generating
+    /// TOTP codes alongside this entry's password.
+    #[serde(default)]
+    pub totp: Option<TotpConfig>,
 }
 
 impl PasswordEntry {
@@ -52,6 +57,7 @@ impl PasswordEntry {
             updated_at: now,
             revision: 1,
             deleted_at: None,
+            totp: None,
         }
     }
 
@@ -106,6 +112,20 @@ impl PasswordEntry {
         self.deleted_at.is_some()
     }
 
+    /// Attach (or replace) the TOTP/MFA secret for this entry.
+    pub fn set_totp(&mut self, totp: TotpConfig) {
+        self.totp = Some(totp);
+        self.touch();
+    }
+
+    /// Remove the TOTP/MFA secret from this entry, if any.
+    pub fn clear_totp(&mut self) {
+        if self.totp.is_some() {
+            self.totp = None;
+            self.touch();
+        }
+    }
+
     /// Bump the revision counter and refresh the modification timestamp.
     /// Called on every edit, including deletion.
     fn touch(&mut self) {
@@ -117,12 +137,13 @@ impl PasswordEntry {
     /// two copies of an entry that share the same revision number.
     pub(crate) fn fingerprint(&self) -> String {
         format!(
-            "{}|{}|{}|{}|{}",
+            "{}|{}|{}|{}|{}|{}",
             self.website,
             self.url,
             self.username,
             self.password_serialized,
             self.deleted_at.map(|d| d.to_rfc3339()).unwrap_or_default(),
+            self.totp.as_ref().map(TotpConfig::fingerprint).unwrap_or_default(),
         )
     }
 
@@ -156,6 +177,11 @@ pub struct PasswordEntrySummary {
     pub username: String,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    /// Whether this entry has an MFA/TOTP secret attached. The current
+    /// code itself is deliberately not included here — like the password,
+    /// it's only computed on demand (see [`crate::totp::generate_code`])
+    /// rather than handed out in bulk listings.
+    pub has_totp: bool,
 }
 
 impl From<&PasswordEntry> for PasswordEntrySummary {
@@ -167,6 +193,7 @@ impl From<&PasswordEntry> for PasswordEntrySummary {
             username: entry.username.clone(),
             created_at: entry.created_at,
             updated_at: entry.updated_at,
+            has_totp: entry.totp.is_some(),
         }
     }
 }

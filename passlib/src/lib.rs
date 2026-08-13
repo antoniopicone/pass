@@ -37,10 +37,12 @@ pub mod crypto;
 pub mod entry;
 pub mod error;
 pub mod merge;
+pub mod totp;
 pub mod vault;
 
 // Re-export main types
 pub use entry::{PasswordEntry, PasswordEntrySummary};
 pub use error::{PassError, Result};
 pub use merge::MergeSummary;
+pub use totp::{TotpAlgorithm, TotpConfig};
 pub use vault::Vault;

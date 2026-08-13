@@ -75,6 +75,8 @@ fn handle(request: &Value) -> Value {
         "addEntry" => add_entry(request),
         "updateEntry" => update_entry(request),
         "deleteEntry" => delete_entry(request),
+        "addTotpUri" => add_totp_uri(request),
+        "removeTotp" => remove_totp(request),
         "mergeFromFile" => merge_from_file(request),
         other => Err(format!("Unknown command: {other}")),
     };
@@ -174,6 +176,31 @@ fn delete_entry(req: &Value) -> Result<Value, String> {
     Ok(json!({}))
 }
 
+fn add_totp_uri(req: &Value) -> Result<Value, String> {
+    let path = field(req, "vaultPath")?;
+    let password = field(req, "masterPassword")?;
+    let id = field(req, "id")?;
+    let uri = field(req, "uri")?;
+
+    let totp = passlib::totp::parse_otpauth_uri(uri).map_err(|e| e.to_string())?;
+
+    let mut vault = Vault::unlock(path, password).map_err(|e| e.to_string())?;
+    vault.set_entry_totp(id, totp).map_err(|e| e.to_string())?;
+    vault.save(password).map_err(|e| e.to_string())?;
+    Ok(json!({}))
+}
+
+fn remove_totp(req: &Value) -> Result<Value, String> {
+    let path = field(req, "vaultPath")?;
+    let password = field(req, "masterPassword")?;
+    let id = field(req, "id")?;
+
+    let mut vault = Vault::unlock(path, password).map_err(|e| e.to_string())?;
+    vault.clear_entry_totp(id).map_err(|e| e.to_string())?;
+    vault.save(password).map_err(|e| e.to_string())?;
+    Ok(json!({}))
+}
+
 fn merge_from_file(req: &Value) -> Result<Value, String> {
     let path = field(req, "vaultPath")?;
     let password = field(req, "masterPassword")?;
@@ -194,7 +221,7 @@ fn merge_from_file(req: &Value) -> Result<Value, String> {
 }
 
 fn entry_to_json(entry: &PasswordEntry) -> Value {
-    json!({
+    let mut json = json!({
         "id": entry.id,
         "website": entry.website,
         "url": entry.url,
@@ -202,5 +229,17 @@ fn entry_to_json(entry: &PasswordEntry) -> Value {
         "password": entry.password(),
         "createdAt": entry.created_at.to_rfc3339(),
         "updatedAt": entry.updated_at.to_rfc3339(),
-    })
+    });
+
+    if let Some(totp) = &entry.totp {
+        let now = chrono::Utc::now();
+        if let Ok(code) = passlib::totp::generate_code(totp, now) {
+            json["totp"] = json!({
+                "code": code,
+                "secondsRemaining": passlib::totp::seconds_remaining(totp, now),
+            });
+        }
+    }
+
+    json
 }
