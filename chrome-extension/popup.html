@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>Pass</title>
+<link rel="stylesheet" href="popup.css" />
+</head>
+<body>
+<header>
+  <h1>🔐 Pass</h1>
+</header>
+
+<section id="locked-view">
+  <label>
+    Vault file path
+    <input id="vault-path" type="text" placeholder="/home/user/passwords.kdbx" />
+  </label>
+  <label>
+    Master password
+    <input id="master-password" type="password" placeholder="Master password" autocomplete="off" />
+  </label>
+  <div class="row">
+    <button id="unlock-btn">Unlock</button>
+    <button id="init-btn" class="secondary">Create new vault</button>
+  </div>
+  <p class="hint">
+    Requires the <code>pass-native-host</code> native messaging host to be installed
+    (see chrome-extension/README.md).
+  </p>
+</section>
+
+<section id="unlocked-view" hidden>
+  <div class="row">
+    <input id="search" type="text" placeholder="Search entries…" />
+    <button id="lock-btn" class="secondary">Lock</button>
+  </div>
+  <ul id="entry-list"></ul>
+
+  <details>
+    <summary>Merge another vault copy</summary>
+    <p class="hint">
+      Point this at a synced copy of the vault (e.g. inside your Nextcloud folder)
+      to pull in changes made on another device.
+    </p>
+    <div class="row">
+      <input id="merge-path" type="text" placeholder="/path/to/synced/passwords.kdbx" />
+      <button id="merge-btn">Merge</button>
+    </div>
+  </details>
+</section>
+
+<p id="status" class="status"></p>
+
+<script src="popup.js"></script>
+</body>
+</html>

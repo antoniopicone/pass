@@ -1,12 +1,20 @@
+use crate::totp::TotpConfig;
 use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use uuid::Uuid;
-use zeroize::Zeroize;
+use zeroize::Zeroizing;
 
-/// A password entry containing website credentials
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// A password entry containing website credentials.
+///
+/// This is a plain, owned snapshot — not a live view into the vault. Read
+/// it via [`crate::vault::Vault::get_entry`] /
+/// [`list_entries`][crate::vault::Vault::list_entries], and write changes
+/// back through [`crate::vault::Vault::add_entry`] /
+/// [`update_entry`][crate::vault::Vault::update_entry], which translate it
+/// to and from the underlying KDBX4 entry.
+#[derive(Debug, Clone)]
 pub struct PasswordEntry {
-    /// Unique identifier for this entry
+    /// Unique identifier for this entry (a UUID, matching the KDBX entry's UUID)
     pub id: String,
     /// Human-readable name/title for the website
     pub website: String,
@@ -14,89 +22,94 @@ pub struct PasswordEntry {
     pub url: String,
     /// Username or email address
     pub username: String,
-    /// Password (stored in memory, zeroized on drop)
-    #[serde(skip)]
-    password_data: String,
-    /// Serialized password for vault storage
-    #[serde(rename = "password")]
-    password_serialized: String,
+    /// Password, zeroized on drop
+    password: Zeroizing<String>,
     /// Creation timestamp
     pub created_at: DateTime<Utc>,
     /// Last modification timestamp
     pub updated_at: DateTime<Utc>,
+    /// Optional MFA/2FA secret (from a service's QR code), stored in the
+    /// KDBX entry's standard `otp` field — the same convention KeePassXC
+    /// itself uses, so a TOTP configured by either tool works in both.
+    pub totp: Option<TotpConfig>,
 }
 
 impl PasswordEntry {
     /// Create a new password entry
     pub fn new(website: String, url: String, username: String, password: String) -> Self {
         let now = Utc::now();
-        let password_clone = password.clone();
-        
         Self {
             id: Uuid::new_v4().to_string(),
             website,
             url,
             username,
-            password_data: password,
-            password_serialized: password_clone,
+            password: Zeroizing::new(password),
             created_at: now,
             updated_at: now,
+            totp: None,
+        }
+    }
+
+    /// Reconstruct an entry snapshot from stored data (used when reading
+    /// back from the KDBX vault). Unlike [`PasswordEntry::new`], this does
+    /// not touch `created_at`/`updated_at` — they're taken as given.
+    pub(crate) fn from_parts(
+        id: String,
+        website: String,
+        url: String,
+        username: String,
+        password: String,
+        created_at: DateTime<Utc>,
+        updated_at: DateTime<Utc>,
+        totp: Option<TotpConfig>,
+    ) -> Self {
+        Self {
+            id,
+            website,
+            url,
+            username,
+            password: Zeroizing::new(password),
+            created_at,
+            updated_at,
+            totp,
         }
     }
 
     /// Get the password for this entry
     pub fn password(&self) -> &str {
-        if !self.password_data.is_empty() {
-            &self.password_data
-        } else {
-            &self.password_serialized
-        }
+        &self.password
     }
 
     /// Update the password
     pub fn set_password(&mut self, password: String) {
-        self.password_data.zeroize();
-        self.password_data = password.clone();
-        self.password_serialized = password;
+        self.password = Zeroizing::new(password);
         self.updated_at = Utc::now();
     }
 
     /// Update metadata
     pub fn update(&mut self, website: Option<String>, url: Option<String>, username: Option<String>) {
+        let mut changed = false;
         if let Some(w) = website {
             self.website = w;
+            changed = true;
         }
         if let Some(u) = url {
             self.url = u;
+            changed = true;
         }
         if let Some(un) = username {
             self.username = un;
+            changed = true;
         }
-        self.updated_at = Utc::now();
-    }
-
-    /// Prepare entry for serialization
-    pub(crate) fn prepare_for_serialization(&mut self) {
-        if !self.password_data.is_empty() {
-            self.password_serialized = self.password_data.clone();
+        if changed {
+            self.updated_at = Utc::now();
         }
-    }
-
-    /// Restore entry after deserialization
-    pub(crate) fn restore_after_deserialization(&mut self) {
-        self.password_data = self.password_serialized.clone();
-    }
-}
-
-impl Drop for PasswordEntry {
-    fn drop(&mut self) {
-        self.password_data.zeroize();
-        self.password_serialized.zeroize();
     }
 }
 
 /// Summary view of a password entry (without the actual password)
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PasswordEntrySummary {
     pub id: String,
     pub website: String,
@@ -104,6 +117,11 @@ pub struct PasswordEntrySummary {
     pub username: String,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    /// Whether this entry has an MFA/TOTP secret attached. The current
+    /// code itself is deliberately not included here — like the password,
+    /// it's only computed on demand (see [`crate::totp::generate_code`])
+    /// rather than handed out in bulk listings.
+    pub has_totp: bool,
 }
 
 impl From<&PasswordEntry> for PasswordEntrySummary {
@@ -115,6 +133,7 @@ impl From<&PasswordEntry> for PasswordEntrySummary {
             username: entry.username.clone(),
             created_at: entry.created_at,
             updated_at: entry.updated_at,
+            has_totp: entry.totp.is_some(),
         }
     }
 }

@@ -2,9 +2,6 @@ use thiserror::Error;
 
 #[derive(Error, Debug)]
 pub enum PassError {
-    #[error("Cryptographic error: {0}")]
-    CryptoError(String),
-
     #[error("Invalid master password")]
     InvalidPassword,
 
@@ -14,17 +11,20 @@ pub enum PassError {
     #[error("Failed to read vault file: {0}")]
     IoError(#[from] std::io::Error),
 
-    #[error("Failed to serialize/deserialize data: {0}")]
-    SerializationError(#[from] serde_json::Error),
+    #[error("Vault is corrupted, tampered with, or not a valid KDBX4 file: {0}")]
+    VaultCorrupted(String),
 
-    #[error("Vault is corrupted or tampered with")]
-    VaultCorrupted,
+    #[error("Failed to save vault: {0}")]
+    SaveError(String),
+
+    #[error("Failed to merge vaults: {0}")]
+    MergeError(String),
 
     #[error("Entry not found: {0}")]
     EntryNotFound(String),
 
-    #[error("Invalid vault format or version")]
-    InvalidVaultFormat,
+    #[error("TOTP error: {0}")]
+    TotpError(String),
 }
 
 pub type Result<T> = std::result::Result<T, PassError>;

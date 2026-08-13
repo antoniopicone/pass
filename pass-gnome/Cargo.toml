@@ -1,29 +1,19 @@
 [package]
-name = "passcli"
+name = "pass-gnome"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
 
 [[bin]]
-name = "pass"
+name = "pass-gnome"
 path = "src/main.rs"
 
 [dependencies]
 passlib = { path = "../passlib" }
-
-# CLI framework
-clap = { version = "4.4", features = ["derive"] }
-rpassword = "7.3"
-dialoguer = "0.11"
-colored = "2.1"
-
-# Error handling
-anyhow = "1.0"
-notify = "8.2.0"
+gtk4 = { version = "0.9", package = "gtk4", features = ["v4_12"] }
+libadwaita = { version = "0.7", features = ["v1_5"] }
+glib = "0.20"
 image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "gif", "bmp", "webp"] }
 rqrr = "0.10.1"
-chrono.workspace = true
-
-[dev-dependencies]
-tempfile = "3.27.0"
+chrono = { workspace = true }

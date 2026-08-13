@@ -6,15 +6,16 @@ authors.workspace = true
 license.workspace = true
 
 [dependencies]
-argon2.workspace = true
-aes-gcm.workspace = true
-rand.workspace = true
+keepass = { version = "0.13.20", features = ["save_kdbx4", "totp", "_merge"] }
 zeroize.workspace = true
 serde.workspace = true
-serde_json.workspace = true
 chrono.workspace = true
 uuid.workspace = true
 thiserror.workspace = true
+hmac = "0.13.0"
+sha1 = "0.11.0"
+sha2 = "0.11.0"
+base32 = "0.5.1"
 
 [dev-dependencies]
 tempfile = "3.8"

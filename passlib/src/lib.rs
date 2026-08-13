@@ -1,14 +1,17 @@
 //! # PassLib - Secure Password Manager Library
 //!
-//! A cryptographically secure password management library using AES-256-GCM encryption
-//! and Argon2id key derivation.
+//! A password management library storing vaults as real KDBX4 databases
+//! (KeePass/KeePassXC's native format, via the `keepass` crate), so a
+//! vault written here opens directly in KeePassXC and vice versa.
 //!
 //! ## Features
 //!
-//! - **Strong Encryption**: AES-256-GCM with authenticated encryption
-//! - **Secure Key Derivation**: Argon2id (memory-hard, GPU-resistant)
+//! - **KDBX4 storage**: AES-256 + Argon2id, the same construction KeePassXC uses
 //! - **Zero-Knowledge**: Master password never stored, no recovery mechanism
 //! - **Memory Safety**: Automatic zeroization of sensitive data
+//! - **Cross-device merge**: reconciles two independently-edited copies of
+//!   a vault using KDBX's own last-modification timestamps
+//! - **MFA/TOTP**: codes generated from the same `otp` field KeePassXC writes
 //!
 //! ## Example
 //!
@@ -16,7 +19,7 @@
 //! use passlib::{Vault, PasswordEntry};
 //!
 //! // Create a new vault
-//! let mut vault = Vault::init("passwords.vault", "my_master_password").unwrap();
+//! let mut vault = Vault::init("passwords.kdbx", "my_master_password").unwrap();
 //!
 //! // Add a password
 //! let entry = PasswordEntry::new(
@@ -29,16 +32,17 @@
 //! vault.save("my_master_password").unwrap();
 //!
 //! // Later: unlock and access
-//! let vault = Vault::unlock("passwords.vault", "my_master_password").unwrap();
+//! let vault = Vault::unlock("passwords.kdbx", "my_master_password").unwrap();
 //! let entries = vault.list_entries().unwrap();
 //! ```
 
-pub mod crypto;
 pub mod entry;
 pub mod error;
+pub mod totp;
 pub mod vault;
 
 // Re-export main types
 pub use entry::{PasswordEntry, PasswordEntrySummary};
 pub use error::{PassError, Result};
-pub use vault::Vault;
+pub use totp::{TotpAlgorithm, TotpConfig};
+pub use vault::{MergeSummary, Vault};

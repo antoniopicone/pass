@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 #include <stddef.h>
+#include <stdbool.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -31,6 +32,9 @@ typedef struct {
     char *password;
     int64_t created_at;
     int64_t updated_at;
+    bool has_totp;
+    char *totp_code;              // NULL unless has_totp is true
+    int64_t totp_seconds_remaining; // -1 unless has_totp is true
 } CPasswordEntry;
 
 // List of password entries
@@ -49,6 +53,18 @@ PassResult vault_get_entry(CVault *vault, const char *id, CPasswordEntry **entry
 PassResult vault_update_entry(CVault *vault, const char *id,const char *website, 
                              const char *url, const char *username, const char *password);
 PassResult vault_delete_entry(CVault *vault, const char*id);
+
+// MFA/TOTP
+PassResult vault_set_entry_totp_uri(CVault *vault, const char *id, const char *otpauth_uri);
+PassResult vault_clear_entry_totp(CVault *vault, const char *id);
+
+// Cross-device merge, backed by the vault's underlying KDBX4 database merge
+// (last-modification-time based — see keepass::Database::merge). created_out /
+// updated_out / unchanged_out / deleted_out may each be NULL if the
+// caller doesn't need that count.
+PassResult vault_merge_from_file(CVault *vault, const char *other_path,
+                                 size_t *created_out, size_t *updated_out,
+                                 size_t *unchanged_out, size_t *deleted_out);
 
 // Memory management
 void vault_free(CVault *vault);
