@@ -258,11 +258,18 @@ Requires GTK4 ≥ 4.12 and libadwaita ≥ 1.5 development packages installed
 
 ## 🍎 macOS / iOS
 
-Not built yet. `passlib_ffi` (below) now exposes cross-device merge and
-MFA/TOTP alongside the original CRUD operations, so a SwiftUI app under
-`pass-apple/` (currently an empty placeholder) has what it needs to reach
-feature parity with the CLI — `build-macos.sh` compiles the FFI library for
-Apple Silicon, but no Xcode project exists yet.
+`pass-apple/` has a shared SwiftUI app (unlock/create, search, view/reveal/
+copy password and MFA code with a live countdown, add/edit/delete, attach
+MFA via `otpauth://` URI or a QR photo scanned with Vision, merge another
+vault copy) for both platforms, backed by `passlib_ffi`.
+
+**Unlike every other client in this repo, this one is unverified.** It was
+written in a Linux sandbox with no Xcode, no macOS/iOS SDK, and no way to
+install even the Linux Swift toolchain to compile-check it (outbound
+network policy blocks `download.swift.org`) — so nothing in `pass-apple/`
+has been built or run. See `pass-apple/README.md` for exactly what that
+means, and the setup steps (`build-xcframework.sh`, then a few minutes in
+Xcode) to build and fix it on a real Mac.
 
 ## 🏗️ Architecture
 
@@ -272,10 +279,11 @@ The project is organized as a Rust workspace with these packages:
   crate), cross-device merge, and TOTP/MFA code generation
 - **`passcli`**: Command-line interface application
 - **`passlib_ffi`**: C-compatible FFI bindings — init/unlock/CRUD, merge,
-  and MFA/TOTP — for native apps (e.g. a future `pass-apple` SwiftUI app)
+  and MFA/TOTP — used by `pass-apple`'s Swift wrapper
 - **`pass-native-host`**: Native messaging host bridging the Chromium
   extension to `passlib`
 - **`pass-gnome`**: Native GTK4/libadwaita desktop app for Linux
+- **`pass-apple`**: Shared SwiftUI app for macOS/iOS (unverified — see above)
 
 ### Library Structure
 
@@ -345,8 +353,11 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 - [x] CLI application 
 - [x] GUI application (GNOME/GTK4 — see `pass-gnome/`; a Tauri app was the
       original idea but a native GTK4/libadwaita app fit better on Linux)
-- [ ] macOS app (SwiftUI) — `passlib_ffi` now has what it needs (merge, MFA)
-- [ ] iOS/iPadOS support
+- [~] macOS app (SwiftUI) — see `pass-apple/`; written but **unverified**,
+      needs a real Mac for its first build (no Xcode/macOS SDK in this
+      environment — see `pass-apple/README.md`)
+- [~] iOS support — same shared SwiftUI source as the macOS app, same
+      caveat
 - [ ] Password generator
 - [ ] Clipboard integration with auto-clear
 - [x] TOTP 2FA support (`pass totp`, QR code or URI — see above)
