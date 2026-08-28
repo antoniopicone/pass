@@ -66,6 +66,11 @@ PassResult vault_merge_from_file(CVault *vault, const char *other_path,
                                  size_t *created_out, size_t *updated_out,
                                  size_t *unchanged_out, size_t *deleted_out);
 
+// The Display message of the most recent error on this thread, or NULL if
+// none has occurred yet (e.g. why a call returned PassResultErrorUnknown).
+// Caller must free the result with string_free.
+char *passlib_last_error_message(void);
+
 // Memory management
 void vault_free(CVault *vault);
 void string_free(char *s);

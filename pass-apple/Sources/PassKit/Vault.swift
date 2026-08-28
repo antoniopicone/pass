@@ -38,7 +38,7 @@ public final class Vault: @unchecked Sendable {
             vault_init(ptrs[0], ptrs[1], &handle)
         }
         try check(result)
-        guard let handle else { throw PassError.unknown }
+        guard let handle else { throw PassError.unknown(detail: nil) }
         return Vault(handle: handle, path: path)
     }
 
@@ -49,7 +49,7 @@ public final class Vault: @unchecked Sendable {
             vault_unlock(ptrs[0], ptrs[1], &handle)
         }
         try check(result)
-        guard let handle else { throw PassError.unknown }
+        guard let handle else { throw PassError.unknown(detail: nil) }
         return Vault(handle: handle, path: path)
     }
 
@@ -61,7 +61,7 @@ public final class Vault: @unchecked Sendable {
             vault_add_entry(handle, ptrs[0], ptrs[1], ptrs[2], ptrs[3], &idPtr)
         }
         try check(result)
-        guard let idPtr else { throw PassError.unknown }
+        guard let idPtr else { throw PassError.unknown(detail: nil) }
         defer { string_free(idPtr) }
         return String(cString: idPtr)
     }
@@ -90,7 +90,7 @@ public final class Vault: @unchecked Sendable {
             vault_get_entry(handle, ptrs[0], &entryPtr)
         }
         try check(result)
-        guard let entryPtr else { throw PassError.unknown }
+        guard let entryPtr else { throw PassError.unknown(detail: nil) }
         defer { entry_free(entryPtr) }
         return PasswordEntry(cEntry: entryPtr.pointee)
     }

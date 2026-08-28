@@ -1,8 +1,34 @@
 use libc::{c_char, size_t};
-use passlib::{PasswordEntry, Vault};
+use passlib::{PassError, PasswordEntry, Vault};
+use std::cell::RefCell;
 use std::ffi::{CStr, CString};
 use std::path::PathBuf;
 use std::slice;
+
+thread_local! {
+    // The `Display` text of the most recent `PassError` on this thread, for
+    // callers (the Swift/App layer) that want to show *why* a call returned
+    // `PassResultErrorUnknown` instead of just the opaque code — mirrors
+    // what the CLI already shows via `anyhow`'s error context.
+    static LAST_ERROR: RefCell<Option<String>> = RefCell::new(None);
+}
+
+fn set_last_error(err: &PassError) {
+    LAST_ERROR.with(|cell| *cell.borrow_mut() = Some(err.to_string()));
+}
+
+/// The `Display` message of the most recent error on this thread, or NULL
+/// if none has occurred yet. Caller must free the result with `string_free`.
+///
+/// # Safety
+/// - The returned pointer, if non-NULL, must be freed with `string_free`.
+#[no_mangle]
+pub unsafe extern "C" fn passlib_last_error_message() -> *mut c_char {
+    LAST_ERROR.with(|cell| match cell.borrow().as_ref() {
+        Some(msg) => to_c_string(msg),
+        None => std::ptr::null_mut(),
+    })
+}
 
 // Opaque pointer type for Vault
 pub struct CVault {
@@ -95,7 +121,10 @@ pub unsafe extern "C" fn vault_init(
             *vault_out = Box::into_raw(cvault);
             PassResult::Success
         }
-        Err(_) => PassResult::ErrorUnknown,
+        Err(e) => {
+            set_last_error(&e);
+            PassResult::ErrorUnknown
+        }
     }
 }
 
@@ -132,7 +161,10 @@ pub unsafe extern "C" fn vault_unlock(
         }
         Err(passlib::PassError::InvalidPassword) => PassResult::ErrorInvalidPassword,
         Err(passlib::PassError::VaultNotFound(_)) => PassResult::ErrorVaultNotFound,
-        Err(_) => PassResult::ErrorUnknown,
+        Err(e) => {
+            set_last_error(&e);
+            PassResult::ErrorUnknown
+        }
     }
 }
 
@@ -182,7 +214,8 @@ pub unsafe extern "C" fn vault_add_entry(
 
     match vault_ref.add_entry(entry) {
         Ok(_) => {
-            if let Err(_) = vault_ref.save(&cvault.master_password) {
+            if let Err(e) = vault_ref.save(&cvault.master_password) {
+                set_last_error(&e);
                 return PassResult::ErrorUnknown;
             }
             if !id_out.is_null() {
@@ -190,7 +223,10 @@ pub unsafe extern "C" fn vault_add_entry(
             }
             PassResult::Success
         }
-        Err(_) => PassResult::ErrorUnknown,
+        Err(e) => {
+            set_last_error(&e);
+            PassResult::ErrorUnknown
+        }
     }
 }
 
@@ -267,7 +303,10 @@ pub unsafe extern "C" fn vault_list_entries(
             *list_out = Box::into_raw(list);
             PassResult::Success
         }
-        Err(_) => PassResult::ErrorUnknown,
+        Err(e) => {
+            set_last_error(&e);
+            PassResult::ErrorUnknown
+        }
     }
 }
 
@@ -305,7 +344,10 @@ pub unsafe extern "C" fn vault_get_entry(
             PassResult::Success
         }
         Err(passlib::PassError::EntryNotFound(_)) => PassResult::ErrorEntryNotFound,
-        Err(_) => PassResult::ErrorUnknown,
+        Err(e) => {
+            set_last_error(&e);
+            PassResult::ErrorUnknown
+        }
     }
 }
 
@@ -367,13 +409,17 @@ pub unsafe extern "C" fn vault_update_entry(
         password_opt,
     ) {
         Ok(_) => {
-            if let Err(_) = vault_ref.save(&cvault.master_password) {
+            if let Err(e) = vault_ref.save(&cvault.master_password) {
+                set_last_error(&e);
                 return PassResult::ErrorUnknown;
             }
             PassResult::Success
         }
         Err(passlib::PassError::EntryNotFound(_)) => PassResult::ErrorEntryNotFound,
-        Err(_) => PassResult::ErrorUnknown,
+        Err(e) => {
+            set_last_error(&e);
+            PassResult::ErrorUnknown
+        }
     }
 }
 
@@ -404,13 +450,17 @@ pub unsafe extern "C" fn vault_delete_entry(
 
     match vault_ref.delete_entry(&id_str) {
         Ok(_) => {
-            if let Err(_) = vault_ref.save(&cvault.master_password) {
+            if let Err(e) = vault_ref.save(&cvault.master_password) {
+                set_last_error(&e);
                 return PassResult::ErrorUnknown;
             }
             PassResult::Success
         }
         Err(passlib::PassError::EntryNotFound(_)) => PassResult::ErrorEntryNotFound,
-        Err(_) => PassResult::ErrorUnknown,
+        Err(e) => {
+            set_last_error(&e);
+            PassResult::ErrorUnknown
+        }
     }
 }
 
@@ -454,13 +504,17 @@ pub unsafe extern "C" fn vault_set_entry_totp_uri(
 
     match vault_ref.set_entry_totp(&id_str, totp) {
         Ok(_) => {
-            if vault_ref.save(&cvault.master_password).is_err() {
+            if let Err(e) = vault_ref.save(&cvault.master_password) {
+                set_last_error(&e);
                 return PassResult::ErrorUnknown;
             }
             PassResult::Success
         }
         Err(passlib::PassError::EntryNotFound(_)) => PassResult::ErrorEntryNotFound,
-        Err(_) => PassResult::ErrorUnknown,
+        Err(e) => {
+            set_last_error(&e);
+            PassResult::ErrorUnknown
+        }
     }
 }
 
@@ -488,13 +542,17 @@ pub unsafe extern "C" fn vault_clear_entry_totp(vault: *mut CVault, id: *const c
 
     match vault_ref.clear_entry_totp(&id_str) {
         Ok(_) => {
-            if vault_ref.save(&cvault.master_password).is_err() {
+            if let Err(e) = vault_ref.save(&cvault.master_password) {
+                set_last_error(&e);
                 return PassResult::ErrorUnknown;
             }
             PassResult::Success
         }
         Err(passlib::PassError::EntryNotFound(_)) => PassResult::ErrorEntryNotFound,
-        Err(_) => PassResult::ErrorUnknown,
+        Err(e) => {
+            set_last_error(&e);
+            PassResult::ErrorUnknown
+        }
     }
 }
 
@@ -532,7 +590,8 @@ pub unsafe extern "C" fn vault_merge_from_file(
 
     match vault_ref.merge_from_file(&other_path_str, &cvault.master_password) {
         Ok(summary) => {
-            if vault_ref.save(&cvault.master_password).is_err() {
+            if let Err(e) = vault_ref.save(&cvault.master_password) {
+                set_last_error(&e);
                 return PassResult::ErrorUnknown;
             }
             if !created_out.is_null() {
@@ -551,7 +610,10 @@ pub unsafe extern "C" fn vault_merge_from_file(
         }
         Err(passlib::PassError::VaultNotFound(_)) => PassResult::ErrorVaultNotFound,
         Err(passlib::PassError::InvalidPassword) => PassResult::ErrorInvalidPassword,
-        Err(_) => PassResult::ErrorUnknown,
+        Err(e) => {
+            set_last_error(&e);
+            PassResult::ErrorUnknown
+        }
     }
 }
 

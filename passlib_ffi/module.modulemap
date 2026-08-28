@@ -1,0 +1,4 @@
+module PassKitFFI {
+    header "passlib_ffi.h"
+    export *
+}

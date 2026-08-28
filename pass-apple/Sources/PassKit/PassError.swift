@@ -8,7 +8,11 @@ public enum PassError: Error, LocalizedError, Equatable {
     case vaultExists
     case entryNotFound
     case invalidInput
-    case unknown
+    /// A failure that doesn't map to a specific `PassResult` code, carrying
+    /// the underlying Rust error's message when available (from
+    /// `passlib_last_error_message`) — e.g. why a vault file failed to
+    /// parse as valid KDBX4, or why a save to disk failed.
+    case unknown(detail: String?)
 
     public var errorDescription: String? {
         switch self {
@@ -22,7 +26,10 @@ public enum PassError: Error, LocalizedError, Equatable {
             return "Entry not found."
         case .invalidInput:
             return "Invalid input."
-        case .unknown:
+        case .unknown(let detail):
+            if let detail {
+                return detail
+            }
             return "Something went wrong."
         }
     }
@@ -40,8 +47,14 @@ public enum PassError: Error, LocalizedError, Equatable {
         case PassResultErrorInvalidInput:
             self = .invalidInput
         default:
-            self = .unknown
+            self = .unknown(detail: PassError.consumeLastErrorMessage())
         }
+    }
+
+    private static func consumeLastErrorMessage() -> String? {
+        guard let ptr = passlib_last_error_message() else { return nil }
+        defer { string_free(ptr) }
+        return String(cString: ptr)
     }
 }
 

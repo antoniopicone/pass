@@ -1,3 +1,4 @@
+import PassKit
 import SwiftUI
 
 enum EntryFormMode {

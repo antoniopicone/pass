@@ -1,2 +1,6 @@
 *.xcodeproj
+.build/
+.swiftpm/
+pass-apple/PassKitFFI.xcframework/
+.DS_Store
 /target
