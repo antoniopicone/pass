@@ -26,16 +26,36 @@ when the browser closes.
 
 ## Setup
 
-1. **Build and register the native host.** From the repo root:
+1. **Build and register the native host.**
+
+   On macOS and Linux, from the repo root:
 
    ```bash
    chrome-extension/native-host/install.sh <extension-id>
+   ```
+
+   On Windows, from PowerShell (no administrator rights needed):
+
+   ```powershell
+   .\chrome-extension\native-host\install.ps1 -ExtensionId <extension-id>
    ```
 
    You need the extension ID for this, which you only get after loading the
    extension once (step 2) — so do step 2 first, copy the ID shown on
    `chrome://extensions`, then come back and run this script. Re-run it
    whenever the extension ID changes.
+
+   Both scripts build `pass-native-host`, write a manifest JSON next to
+   themselves, and point the browser at it. How the browser is pointed at it
+   differs by platform: on macOS and Linux the manifest is copied into each
+   browser's `NativeMessagingHosts` directory, while on Windows it stays put
+   and a registry value under `HKCU\Software\...\NativeMessagingHosts`
+   holds its path. Chrome, Chromium, Brave and Edge are all registered where
+   they are installed.
+
+   Quit the browser completely afterwards — every window, so the process
+   really exits. Reloading the extension is not enough; the host list is read
+   at browser startup.
 
 2. **Load the extension.** Open `chrome://extensions` (or
    `chrome://extensions` in any Chromium-based browser), enable

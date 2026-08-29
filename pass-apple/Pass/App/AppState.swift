@@ -9,10 +9,28 @@ import PassKit
 /// move to a background actor if that ever becomes noticeable.
 @MainActor
 final class AppState: ObservableObject {
-    @Published var vaultPath: String = AppState.defaultVaultPath()
+    /// Persisted across launches (in `UserDefaults`, just a file path — not
+    /// sensitive) so the app remembers the vault the user picked or created
+    /// last time instead of asking again on every launch.
+    @Published var vaultPath: String = AppState.loadVaultPath() {
+        didSet { UserDefaults.standard.set(vaultPath, forKey: Self.vaultPathDefaultsKey) }
+    }
     @Published private(set) var entries: [PasswordEntry] = []
     @Published var errorMessage: String?
     @Published var statusMessage: String?
+
+    /// Set right after a successful unlock/create when biometrics are
+    /// available but not yet enabled for this vault, so `RootView` (which,
+    /// unlike `UnlockView`/`EntryListView`, stays mounted across the
+    /// locked/unlocked transition) can offer to enable them. Cleared once
+    /// the user answers.
+    @Published var biometricEnrollmentOffer: BiometricEnrollmentOffer?
+
+    struct BiometricEnrollmentOffer: Identifiable {
+        let id = UUID()
+        let vaultPath: String
+        let password: String
+    }
 
     private var vault: Vault?
 
@@ -23,6 +41,12 @@ final class AppState: ObservableObject {
         return documents?.appendingPathComponent("passwords.kdbx").path ?? "passwords.kdbx"
     }
 
+    private static let vaultPathDefaultsKey = "PassVaultPath"
+
+    private static func loadVaultPath() -> String {
+        UserDefaults.standard.string(forKey: vaultPathDefaultsKey) ?? defaultVaultPath()
+    }
+
     // MARK: - Unlock / create / lock
 
     func unlock(password: String) {
@@ -31,6 +55,7 @@ final class AppState: ObservableObject {
             vault = opened
             errorMessage = nil
             try reload()
+            offerBiometricEnrollmentIfNeeded(password: password)
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -46,9 +71,15 @@ final class AppState: ObservableObject {
             vault = created
             errorMessage = nil
             try reload()
+            offerBiometricEnrollmentIfNeeded(password: password)
         } catch {
             errorMessage = error.localizedDescription
         }
+    }
+
+    private func offerBiometricEnrollmentIfNeeded(password: String) {
+        guard BiometricUnlock.isAvailable(), !BiometricUnlock.hasStoredPassword(forVaultPath: vaultPath) else { return }
+        biometricEnrollmentOffer = BiometricEnrollmentOffer(vaultPath: vaultPath, password: password)
     }
 
     func lock() {

@@ -119,7 +119,8 @@ enum TotpAction {
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
-
+    #[cfg(windows)]
+    let _ = colored::control::set_virtual_terminal(true);
     match cli.command {
         Commands::Init => cmd_init(&cli.vault),
         Commands::Add => cmd_add(&cli.vault),

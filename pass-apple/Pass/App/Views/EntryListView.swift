@@ -7,6 +7,8 @@ struct EntryListView: View {
     @State private var searchText = ""
     @State private var showAddSheet = false
     @State private var showMergeSheet = false
+    @State private var showSettingsSheet = false
+    @State private var selectedEntryId: String?
 
     private var filteredEntries: [PasswordEntry] {
         guard !searchText.isEmpty else { return state.entries }
@@ -19,8 +21,8 @@ struct EntryListView: View {
     }
 
     var body: some View {
-        NavigationStack {
-            List {
+        NavigationSplitView {
+            List(selection: $selectedEntryId) {
                 if filteredEntries.isEmpty {
                     ContentUnavailableView(
                         state.entries.isEmpty ? "No Entries Yet" : "No Matches",
@@ -29,16 +31,12 @@ struct EntryListView: View {
                     )
                 } else {
                     ForEach(filteredEntries) { entry in
-                        NavigationLink(value: entry.id) {
-                            EntryRow(entry: entry)
-                        }
+                        EntryRow(entry: entry)
+                            .tag(entry.id)
                     }
                 }
             }
             .navigationTitle("Pass")
-            .navigationDestination(for: String.self) { entryId in
-                EntryDetailView(entryId: entryId)
-            }
             .searchable(text: $searchText, prompt: "Search entries")
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
@@ -54,6 +52,11 @@ struct EntryListView: View {
                             showMergeSheet = true
                         } label: {
                             Label("Merge From File…", systemImage: "arrow.triangle.merge")
+                        }
+                        Button {
+                            showSettingsSheet = true
+                        } label: {
+                            Label("Settings…", systemImage: "gearshape")
                         }
                         Button(role: .destructive) {
                             state.lock()
@@ -71,10 +74,26 @@ struct EntryListView: View {
             .sheet(isPresented: $showMergeSheet) {
                 MergeView()
             }
+            .sheet(isPresented: $showSettingsSheet) {
+                SettingsView()
+            }
             .overlay(alignment: .bottom) {
                 if let status = state.statusMessage {
                     StatusBanner(text: status) { state.statusMessage = nil }
                 }
+            }
+        } detail: {
+            // Keeps the detail pane in sync when the selected entry is
+            // deleted (or moved to the Recycle Bin) out from under it —
+            // `state.entries` already excludes recycled entries.
+            if let selectedEntryId, state.entries.contains(where: { $0.id == selectedEntryId }) {
+                EntryDetailView(entryId: selectedEntryId)
+            } else {
+                ContentUnavailableView(
+                    "No Entry Selected",
+                    systemImage: "key.fill",
+                    description: Text("Select an entry from the list to view its details.")
+                )
             }
         }
     }

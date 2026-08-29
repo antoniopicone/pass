@@ -25,7 +25,7 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 echo "Building pass-native-host (release)…"
 (cd "$REPO_ROOT" && cargo build --release -p pass-native-host)
 
-BINARY_PATH="$REPO_ROOT/target/release/$HOST_NAME"
+BINARY_PATH="$REPO_ROOT/target/release/pass-native-host"
 if [ ! -x "$BINARY_PATH" ]; then
   echo "Expected binary not found at $BINARY_PATH" >&2
   exit 1
@@ -58,14 +58,20 @@ case "$(uname -s)" in
   Darwin)
     install_for_dir "$HOME/Library/Application Support/Google/Chrome/NativeMessagingHosts" "Chrome (macOS)"
     install_for_dir "$HOME/Library/Application Support/Chromium/NativeMessagingHosts" "Chromium (macOS)"
+    install_for_dir "$HOME/Library/Application Support/BraveSoftware/Brave-Browser/NativeMessagingHosts" "Brave (macOS)"
+    install_for_dir "$HOME/Library/Application Support/Microsoft Edge/NativeMessagingHosts" "Edge (macOS)"
     ;;
   Linux)
     install_for_dir "$HOME/.config/google-chrome/NativeMessagingHosts" "Chrome (Linux)"
     install_for_dir "$HOME/.config/chromium/NativeMessagingHosts" "Chromium (Linux)"
+    install_for_dir "$HOME/.config/BraveSoftware/Brave-Browser/NativeMessagingHosts" "Brave (Linux)"
+    install_for_dir "$HOME/.config/microsoft-edge/NativeMessagingHosts" "Edge (Linux)"
     ;;
   *)
-    echo "Unsupported OS: $(uname -s). Copy $MANIFEST_PATH manually into your browser's" \
-         "NativeMessagingHosts directory (see https://developer.chrome.com/docs/extensions/develop/concepts/native-messaging)." >&2
+    echo "Unsupported OS: $(uname -s)." >&2
+    echo "On Windows, run chrome-extension/native-host/install.ps1 from PowerShell instead:" >&2
+    echo "  .\\install.ps1 -ExtensionId $EXTENSION_ID" >&2
+    exit 1
     ;;
 esac
 
