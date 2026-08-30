@@ -6,50 +6,242 @@
 <link rel="stylesheet" href="popup.css" />
 </head>
 <body>
-<header>
-  <h1>🔐 Pass</h1>
-</header>
 
-<section id="locked-view">
-  <label>
-    Vault file path
+<!-- ===================== Locked ===================== -->
+<section id="locked-view" class="view">
+  <div class="brand">
+    <span class="brand-mark">🔐</span>
+    <span class="brand-name">Pass</span>
+  </div>
+
+  <label class="field">
+    <span class="field-label" data-i18n="field_vault_path">Vault file path</span>
     <input id="vault-path" type="text" placeholder="/home/user/passwords.kdbx" />
   </label>
-  <label>
-    Master password
-    <input id="master-password" type="password" placeholder="Master password" autocomplete="off" />
+  <label class="field">
+    <span class="field-label" data-i18n="field_master_password">Master password</span>
+    <input id="master-password" type="password" data-i18n-placeholder="field_master_password" placeholder="Master password" autocomplete="off" />
   </label>
   <div class="row">
-    <button id="unlock-btn">Unlock</button>
-    <button id="init-btn" class="secondary">Create new vault</button>
+    <button id="unlock-btn" class="btn btn-primary btn-block" data-i18n="action_unlock">Unlock</button>
   </div>
-  <p class="hint">
-    Requires the <code>pass-native-host</code> native messaging host to be installed
-    (see chrome-extension/README.md).
-  </p>
+  <button id="init-btn" class="btn-link" data-i18n="action_create_vault">Create a new vault at this path</button>
 </section>
 
-<section id="unlocked-view" hidden>
-  <div class="row">
-    <input id="search" type="text" placeholder="Search entries…" />
-    <button id="lock-btn" class="secondary">Lock</button>
-  </div>
-  <ul id="entry-list"></ul>
-
-  <details>
-    <summary>Merge another vault copy</summary>
-    <p class="hint">
-      Point this at a synced copy of the vault (e.g. inside your Nextcloud folder)
-      to pull in changes made on another device.
-    </p>
-    <div class="row">
-      <input id="merge-path" type="text" placeholder="/path/to/synced/passwords.kdbx" />
-      <button id="merge-btn">Merge</button>
+<!-- ===================== Entry list ===================== -->
+<section id="list-view" class="view" hidden>
+  <header class="app-bar">
+    <div class="search-box">
+      <svg class="icon" viewBox="0 0 20 20"><path fill="currentColor" d="M13.6 12.3a6 6 0 1 0-1.3 1.3l3.9 3.9 1.3-1.3-3.9-3.9ZM8 12.5a4.5 4.5 0 1 1 0-9 4.5 4.5 0 0 1 0 9Z"/></svg>
+      <input id="search" type="text" data-i18n-placeholder="action_search_entries" placeholder="Search entries…" />
     </div>
-  </details>
+    <button id="lock-btn" class="icon-btn" data-i18n-title="action_lock" title="Lock vault">
+      <svg class="icon" viewBox="0 0 20 20"><path fill="currentColor" d="M5 8V6a5 5 0 0 1 10 0v2h1a1 1 0 0 1 1 1v8a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1h1Zm2 0h6V6a3 3 0 0 0-6 0v2Z"/></svg>
+    </button>
+  </header>
+
+  <ul id="entry-list" class="entry-list"></ul>
+
+  <button id="fab-add" class="fab" data-i18n-title="action_add_entry" title="Add new entry">
+    <svg class="icon" viewBox="0 0 20 20"><path fill="currentColor" d="M9 1h2v8h8v2h-8v8H9v-8H1V9h8V1Z"/></svg>
+  </button>
+
+  <button id="show-merge-btn" class="btn-link footer-link" data-i18n="action_merge_vault">Merge another vault copy…</button>
 </section>
 
-<p id="status" class="status"></p>
+<!-- ===================== Merge panel ===================== -->
+<section id="merge-view" class="view" hidden>
+  <header class="app-bar app-bar-title">
+    <button id="merge-back-btn" class="icon-btn" data-i18n-title="action_back" title="Back">
+      <svg class="icon" viewBox="0 0 20 20"><path fill="currentColor" d="M12.7 15.3 7.4 10l5.3-5.3 1.4 1.4L10.2 10l3.9 3.9-1.4 1.4Z"/></svg>
+    </button>
+    <h2 data-i18n="merge_title">Merge vault copy</h2>
+  </header>
+  <p class="hint" data-i18n="merge_hint">
+    Point this at a synced copy of the vault (e.g. inside your Nextcloud folder)
+    to pull in changes made on another device.
+  </p>
+  <label class="field">
+    <span class="field-label" data-i18n="merge_field_path">Other vault path</span>
+    <input id="merge-path" type="text" placeholder="/path/to/synced/passwords.kdbx" />
+  </label>
+  <button id="merge-btn" class="btn btn-primary btn-block" data-i18n="action_merge">Merge</button>
+</section>
+
+<!-- ===================== Add entry ===================== -->
+<section id="add-view" class="view" hidden>
+  <header class="app-bar app-bar-title">
+    <button id="add-back-btn" class="icon-btn" data-i18n-title="action_back" title="Back">
+      <svg class="icon" viewBox="0 0 20 20"><path fill="currentColor" d="M12.7 15.3 7.4 10l5.3-5.3 1.4 1.4L10.2 10l3.9 3.9-1.4 1.4Z"/></svg>
+    </button>
+    <h2 data-i18n="add_title">New entry</h2>
+  </header>
+  <label class="field">
+    <span class="field-label" data-i18n="field_website">Website name</span>
+    <input id="add-website" type="text" placeholder="GitHub" />
+  </label>
+  <label class="field">
+    <span class="field-label" data-i18n="field_url">URL</span>
+    <input id="add-url" type="text" placeholder="https://github.com" />
+  </label>
+  <label class="field">
+    <span class="field-label" data-i18n="field_username">Username</span>
+    <input id="add-username" type="text" placeholder="me@example.com" />
+  </label>
+  <label class="field">
+    <span class="field-label" data-i18n="field_password">Password</span>
+    <div class="password-row">
+      <input id="add-password" type="password" placeholder="Password" />
+      <button id="add-reveal-btn" class="icon-btn" type="button" data-i18n-title="action_show_hide" title="Show/hide">
+        <svg class="icon" viewBox="0 0 20 20"><path fill="currentColor" d="M10 4C5 4 1.7 8 1.7 8s3.3 4 8.3 4 8.3-4 8.3-4-3.3-4-8.3-4Zm0 6.5A2.5 2.5 0 1 1 10 5.5a2.5 2.5 0 0 1 0 5Z"/></svg>
+      </button>
+      <button id="add-generate-btn" class="icon-btn" type="button" data-i18n-title="action_generate_password" title="Generate a strong password">
+        <svg class="icon" viewBox="0 0 20 20"><path fill="currentColor" d="M10 2a8 8 0 1 0 8 8h-2a6 6 0 1 1-1.8-4.2L12 8h6V2l-2.3 2.3A7.96 7.96 0 0 0 10 2Z"/></svg>
+      </button>
+    </div>
+  </label>
+  <label class="field">
+    <span class="field-label" data-i18n="field_additional_urls">Also match these sites <span class="field-hint" data-i18n="field_additional_urls_hint">(one per line, optional)</span></span>
+    <textarea id="add-additional-urls" class="textarea" rows="2" placeholder="icloud.com&#10;appleid.apple.com"></textarea>
+  </label>
+  <label class="field">
+    <span class="field-label" data-i18n="field_notes">Notes</span>
+    <textarea id="add-notes" class="textarea" rows="3" data-i18n-placeholder="field_notes_placeholder" placeholder="Optional notes…"></textarea>
+  </label>
+  <button id="add-save-btn" class="btn btn-primary btn-block" data-i18n="action_save_entry">Save entry</button>
+</section>
+
+<!-- ===================== Entry detail ===================== -->
+<section id="detail-view" class="view" hidden>
+  <header class="app-bar app-bar-title">
+    <button id="detail-back-btn" class="icon-btn" data-i18n-title="action_back" title="Back">
+      <svg class="icon" viewBox="0 0 20 20"><path fill="currentColor" d="M12.7 15.3 7.4 10l5.3-5.3 1.4 1.4L10.2 10l3.9 3.9-1.4 1.4Z"/></svg>
+    </button>
+    <h2 class="app-bar-spacer" data-i18n="detail_title">Entry</h2>
+    <button id="detail-edit-btn" class="icon-btn" data-i18n-title="action_edit" title="Edit">
+      <svg class="icon" viewBox="0 0 20 20"><path fill="currentColor" d="M14.7 2.3a1 1 0 0 1 1.4 0l1.6 1.6a1 1 0 0 1 0 1.4L7 15.9l-3.6.7.7-3.6L14.7 2.3Z"/></svg>
+    </button>
+    <button id="detail-delete-btn" class="icon-btn icon-btn-danger" data-i18n-title="action_delete" title="Delete">
+      <svg class="icon" viewBox="0 0 20 20"><path fill="currentColor" d="M6 2h8l1 2h4v2H1V4h4l1-2Zm-2 6h12l-1 10H5L4 8Z"/></svg>
+    </button>
+  </header>
+
+  <div class="detail-hero">
+    <div id="detail-avatar" class="avatar avatar-lg">?</div>
+    <div class="detail-hero-text">
+      <div id="detail-website" class="detail-title"></div>
+      <div id="detail-username-sub" class="detail-subtitle"></div>
+    </div>
+  </div>
+
+  <!-- view mode -->
+  <div id="detail-view-fields" class="card">
+    <div class="detail-row">
+      <div class="detail-row-text">
+        <span class="detail-row-label" data-i18n="field_username">Username</span>
+        <span id="detail-username" class="detail-row-value"></span>
+      </div>
+      <button class="icon-btn copy-btn" data-copy="username" data-i18n-title="action_copy_username" title="Copy username">
+        <svg class="icon" viewBox="0 0 20 20"><path fill="currentColor" d="M6 2h9v11H6V2Zm-3 3h2v11h9v2H3V5Z"/></svg>
+      </button>
+    </div>
+    <div class="detail-row">
+      <div class="detail-row-text">
+        <span class="detail-row-label" data-i18n="field_password">Password</span>
+        <span id="detail-password" class="detail-row-value monospace">••••••••••</span>
+      </div>
+      <button id="detail-reveal-btn" class="icon-btn" data-i18n-title="action_show_hide_password" title="Show/hide password">
+        <svg class="icon" viewBox="0 0 20 20"><path fill="currentColor" d="M10 4C5 4 1.7 8 1.7 8s3.3 4 8.3 4 8.3-4 8.3-4-3.3-4-8.3-4Zm0 6.5A2.5 2.5 0 1 1 10 5.5a2.5 2.5 0 0 1 0 5Z"/></svg>
+      </button>
+      <button class="icon-btn copy-btn" data-copy="password" data-i18n-title="action_copy_password" title="Copy password">
+        <svg class="icon" viewBox="0 0 20 20"><path fill="currentColor" d="M6 2h9v11H6V2Zm-3 3h2v11h9v2H3V5Z"/></svg>
+      </button>
+    </div>
+    <div class="detail-row">
+      <div class="detail-row-text">
+        <span class="detail-row-label" data-i18n="field_website">Website</span>
+        <span id="detail-url" class="detail-row-value"></span>
+      </div>
+      <button class="icon-btn copy-btn" data-copy="url" data-i18n-title="action_copy_url" title="Copy URL">
+        <svg class="icon" viewBox="0 0 20 20"><path fill="currentColor" d="M6 2h9v11H6V2Zm-3 3h2v11h9v2H3V5Z"/></svg>
+      </button>
+    </div>
+    <div id="detail-additional-urls-row" class="detail-row" hidden>
+      <div class="detail-row-text">
+        <span class="detail-row-label" data-i18n="field_additional_urls_short">Also matches</span>
+        <span id="detail-additional-urls" class="detail-row-value"></span>
+      </div>
+    </div>
+    <div id="detail-notes-row" class="detail-row" hidden>
+      <div class="detail-row-text">
+        <span class="detail-row-label" data-i18n="field_notes">Notes</span>
+        <span id="detail-notes" class="detail-row-value detail-row-value-wrap"></span>
+      </div>
+    </div>
+  </div>
+
+  <!-- edit mode -->
+  <div id="detail-edit-fields" class="card" hidden>
+    <label class="field">
+      <span class="field-label" data-i18n="field_website">Website name</span>
+      <input id="edit-website" type="text" />
+    </label>
+    <label class="field">
+      <span class="field-label" data-i18n="field_url">URL</span>
+      <input id="edit-url" type="text" />
+    </label>
+    <label class="field">
+      <span class="field-label" data-i18n="field_username">Username</span>
+      <input id="edit-username" type="text" />
+    </label>
+    <label class="field">
+      <span class="field-label"><span data-i18n="field_password">Password</span> <span class="field-hint" data-i18n="field_password_hint">(leave blank to keep unchanged)</span></span>
+      <div class="password-row">
+        <input id="edit-password" type="password" placeholder="••••••••••" />
+        <button id="edit-generate-btn" class="icon-btn" type="button" data-i18n-title="action_generate_password" title="Generate a strong password">
+          <svg class="icon" viewBox="0 0 20 20"><path fill="currentColor" d="M10 2a8 8 0 1 0 8 8h-2a6 6 0 1 1-1.8-4.2L12 8h6V2l-2.3 2.3A7.96 7.96 0 0 0 10 2Z"/></svg>
+        </button>
+      </div>
+    </label>
+    <label class="field">
+      <span class="field-label" data-i18n="field_additional_urls">Also match these sites <span class="field-hint" data-i18n="field_additional_urls_hint">(one per line, optional)</span></span>
+      <textarea id="edit-additional-urls" class="textarea" rows="2" placeholder="icloud.com&#10;appleid.apple.com"></textarea>
+    </label>
+    <label class="field">
+      <span class="field-label" data-i18n="field_notes">Notes</span>
+      <textarea id="edit-notes" class="textarea" rows="3" data-i18n-placeholder="field_notes_placeholder" placeholder="Optional notes…"></textarea>
+    </label>
+    <div class="row">
+      <button id="edit-cancel-btn" class="btn btn-secondary" data-i18n="action_cancel">Cancel</button>
+      <button id="edit-save-btn" class="btn btn-primary" data-i18n="action_save_changes">Save changes</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="detail-row">
+      <div class="detail-row-text">
+        <span class="detail-row-label" data-i18n="field_mfa_code">MFA code</span>
+        <span id="detail-totp-code" class="detail-row-value monospace"></span>
+      </div>
+      <button id="detail-totp-action-btn" class="btn btn-secondary btn-sm"></button>
+    </div>
+  </div>
+
+  <div id="detail-history-card" class="card" hidden>
+    <button id="detail-history-toggle" class="detail-row detail-row-button" type="button">
+      <div class="detail-row-text">
+        <span class="detail-row-label" data-i18n="history_title">Password history</span>
+        <span id="detail-history-summary" class="detail-row-value"></span>
+      </div>
+      <svg id="detail-history-chevron" class="icon icon-chevron" viewBox="0 0 20 20"><path fill="currentColor" d="M15.3 7.3 10 12.6 4.7 7.3l1.4-1.4L10 9.8l3.9-3.9 1.4 1.4Z"/></svg>
+    </button>
+    <ul id="detail-history-list" class="history-list" hidden></ul>
+  </div>
+
+  <p id="detail-meta" class="hint detail-meta"></p>
+</section>
+
+<p id="status" class="status" role="status"></p>
 
 <script src="popup.js"></script>
 </body>

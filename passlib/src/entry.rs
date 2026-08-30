@@ -32,6 +32,28 @@ pub struct PasswordEntry {
     /// KDBX entry's standard `otp` field — the same convention KeePassXC
     /// itself uses, so a TOTP configured by either tool works in both.
     pub totp: Option<TotpConfig>,
+    /// Free-form notes, stored in the KDBX entry's standard `Notes` field.
+    pub notes: String,
+    /// Extra URLs this entry should also be treated as belonging to — e.g.
+    /// one Apple account entry also matching `appleid.apple.com` and
+    /// `icloud.com`, on top of its primary `url`. Stored as a Pass-specific
+    /// custom string field (see [`crate::vault`]'s `ADDITIONAL_URLS_FIELD`),
+    /// newline-separated — a plain, visible custom attribute in
+    /// KeePassXC/other KDBX tools, just not specially understood by them.
+    pub additional_urls: Vec<String>,
+    /// Previous passwords, newest first, kept automatically by the KDBX4
+    /// history mechanism (every [`crate::vault::Vault::update_entry`] call
+    /// archives the pre-change state — the same mechanism KeePassXC itself
+    /// relies on). Empty for an entry whose password has never changed.
+    pub history: Vec<PasswordHistoryEntry>,
+}
+
+/// One previous version of an entry's password, from the KDBX4 history.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PasswordHistoryEntry {
+    pub password: String,
+    pub changed_at: DateTime<Utc>,
 }
 
 impl PasswordEntry {
@@ -47,12 +69,16 @@ impl PasswordEntry {
             created_at: now,
             updated_at: now,
             totp: None,
+            notes: String::new(),
+            additional_urls: Vec::new(),
+            history: Vec::new(),
         }
     }
 
     /// Reconstruct an entry snapshot from stored data (used when reading
     /// back from the KDBX vault). Unlike [`PasswordEntry::new`], this does
     /// not touch `created_at`/`updated_at` — they're taken as given.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn from_parts(
         id: String,
         website: String,
@@ -62,6 +88,9 @@ impl PasswordEntry {
         created_at: DateTime<Utc>,
         updated_at: DateTime<Utc>,
         totp: Option<TotpConfig>,
+        notes: String,
+        additional_urls: Vec<String>,
+        history: Vec<PasswordHistoryEntry>,
     ) -> Self {
         Self {
             id,
@@ -72,6 +101,9 @@ impl PasswordEntry {
             created_at,
             updated_at,
             totp,
+            notes,
+            additional_urls,
+            history,
         }
     }
 
@@ -105,6 +137,12 @@ impl PasswordEntry {
             self.updated_at = Utc::now();
         }
     }
+
+    /// All URLs this entry should match against: its primary `url` followed
+    /// by any `additional_urls`.
+    pub fn all_urls(&self) -> impl Iterator<Item = &str> {
+        std::iter::once(self.url.as_str()).chain(self.additional_urls.iter().map(String::as_str))
+    }
 }
 
 /// Summary view of a password entry (without the actual password)
@@ -122,6 +160,7 @@ pub struct PasswordEntrySummary {
     /// it's only computed on demand (see [`crate::totp::generate_code`])
     /// rather than handed out in bulk listings.
     pub has_totp: bool,
+    pub additional_urls: Vec<String>,
 }
 
 impl From<&PasswordEntry> for PasswordEntrySummary {
@@ -134,6 +173,7 @@ impl From<&PasswordEntry> for PasswordEntrySummary {
             created_at: entry.created_at,
             updated_at: entry.updated_at,
             has_totp: entry.totp.is_some(),
+            additional_urls: entry.additional_urls.clone(),
         }
     }
 }

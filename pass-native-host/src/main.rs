@@ -72,6 +72,7 @@ fn handle(request: &Value) -> Value {
         "initVault" => init_vault(request),
         "unlockVault" => unlock_vault(request),
         "getEntry" => get_entry(request),
+        "getEntryHistory" => get_entry_history(request),
         "addEntry" => add_entry(request),
         "updateEntry" => update_entry(request),
         "deleteEntry" => delete_entry(request),
@@ -98,6 +99,12 @@ fn field<'a>(req: &'a Value, name: &str) -> Result<&'a str, String> {
 
 fn optional_field(req: &Value, name: &str) -> Option<String> {
     req.get(name).and_then(Value::as_str).map(str::to_string)
+}
+
+fn optional_string_array_field(req: &Value, name: &str) -> Option<Vec<String>> {
+    req.get(name)
+        .and_then(Value::as_array)
+        .map(|arr| arr.iter().filter_map(Value::as_str).map(str::to_string).collect())
 }
 
 fn vault_exists(req: &Value) -> Result<Value, String> {
@@ -131,6 +138,23 @@ fn get_entry(req: &Value) -> Result<Value, String> {
     Ok(json!({ "entry": entry_to_json(&entry) }))
 }
 
+/// Previous passwords for an entry (newest first), kept automatically by
+/// the KDBX4 history mechanism — see `passlib::vault`'s module docs.
+fn get_entry_history(req: &Value) -> Result<Value, String> {
+    let path = field(req, "vaultPath")?;
+    let password = field(req, "masterPassword")?;
+    let id = field(req, "id")?;
+
+    let vault = Vault::unlock(path, password).map_err(|e| e.to_string())?;
+    let entry = vault.get_entry(id).map_err(|e| e.to_string())?;
+    let history: Vec<Value> = entry
+        .history
+        .iter()
+        .map(|h| json!({ "password": h.password, "changedAt": h.changed_at.to_rfc3339() }))
+        .collect();
+    Ok(json!({ "history": history }))
+}
+
 fn add_entry(req: &Value) -> Result<Value, String> {
     let path = field(req, "vaultPath")?;
     let password = field(req, "masterPassword")?;
@@ -140,7 +164,9 @@ fn add_entry(req: &Value) -> Result<Value, String> {
     let entry_password = field(req, "entryPassword")?.to_string();
 
     let mut vault = Vault::unlock(path, password).map_err(|e| e.to_string())?;
-    let entry = PasswordEntry::new(website, url, username, entry_password);
+    let mut entry = PasswordEntry::new(website, url, username, entry_password);
+    entry.notes = optional_field(req, "notes").unwrap_or_default();
+    entry.additional_urls = optional_string_array_field(req, "additionalUrls").unwrap_or_default();
     let id = vault.add_entry(entry).map_err(|e| e.to_string())?;
     vault.save(password).map_err(|e| e.to_string())?;
     Ok(json!({ "id": id }))
@@ -159,6 +185,8 @@ fn update_entry(req: &Value) -> Result<Value, String> {
             optional_field(req, "url"),
             optional_field(req, "username"),
             optional_field(req, "entryPassword"),
+            optional_field(req, "notes"),
+            optional_string_array_field(req, "additionalUrls"),
         )
         .map_err(|e| e.to_string())?;
     vault.save(password).map_err(|e| e.to_string())?;
@@ -227,6 +255,8 @@ fn entry_to_json(entry: &PasswordEntry) -> Value {
         "url": entry.url,
         "username": entry.username,
         "password": entry.password(),
+        "notes": entry.notes,
+        "additionalUrls": entry.additional_urls,
         "createdAt": entry.created_at.to_rfc3339(),
         "updatedAt": entry.updated_at.to_rfc3339(),
     });

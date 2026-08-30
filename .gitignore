@@ -4,3 +4,7 @@
 pass-apple/PassKitFFI.xcframework/
 .DS_Store
 /target
+chrome-extension/native-host/com.antoniopicone.pass_native_host.json
+chrome-extension/tests/.venv/
+__pycache__/
+

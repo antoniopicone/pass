@@ -30,6 +30,8 @@ typedef struct {
     char *url;
     char *username;
     char *password;
+    char *notes;             // "" (never NULL) if empty
+    char *additional_urls;   // newline-separated, "" (never NULL) if none
     int64_t created_at;
     int64_t updated_at;
     bool has_totp;
@@ -43,15 +45,32 @@ typedef struct {
     size_t count;
 } CPasswordEntryList;
 
+// One previous password from an entry's KDBX4 history
+typedef struct {
+    char *password;
+    int64_t changed_at;
+} CPasswordHistoryEntry;
+
+// List of history entries, newest first
+typedef struct {
+    CPasswordHistoryEntry *entries;
+    size_t count;
+} CPasswordHistoryList;
+
 // Vault operations
 PassResult vault_init(const char *path, const char *password, CVault **vault_out);
 PassResult vault_unlock(const char *path, const char *password, CVault **vault_out);
-PassResult vault_add_entry(CVault *vault, const char *website, const char *url, 
-                          const char *username, const char *password, char **id_out);
+// notes and additional_urls may be NULL (treated as "none"); additional_urls is newline-separated.
+PassResult vault_add_entry(CVault *vault, const char *website, const char *url,
+                          const char *username, const char *password,
+                          const char *notes, const char *additional_urls, char **id_out);
 PassResult vault_list_entries(CVault *vault, CPasswordEntryList **list_out);
 PassResult vault_get_entry(CVault *vault, const char *id, CPasswordEntry **entry_out);
-PassResult vault_update_entry(CVault *vault, const char *id,const char *website, 
-                             const char *url, const char *username, const char *password);
+PassResult vault_get_entry_history(CVault *vault, const char *id, CPasswordHistoryList **list_out);
+// password/notes/additional_urls: NULL means "leave unchanged"; website/url/username are always applied.
+PassResult vault_update_entry(CVault *vault, const char *id,const char *website,
+                             const char *url, const char *username, const char *password,
+                             const char *notes, const char *additional_urls);
 PassResult vault_delete_entry(CVault *vault, const char*id);
 
 // MFA/TOTP
@@ -76,6 +95,7 @@ void vault_free(CVault *vault);
 void string_free(char *s);
 void entry_free(CPasswordEntry *entry);
 void entry_list_free(CPasswordEntryList *list);
+void history_list_free(CPasswordHistoryList *list);
 
 #ifdef __cplusplus
 }

@@ -54,11 +54,23 @@ public final class Vault: @unchecked Sendable {
     }
 
     /// Add a new entry and persist the vault. Returns the new entry's ID.
+    /// `additionalUrls` are extra sites this entry should also be treated
+    /// as belonging to (e.g. one Apple account entry also matching
+    /// `icloud.com`) — stored as a Pass-specific custom KDBX attribute,
+    /// see `passlib::vault`'s module docs.
     @discardableResult
-    public func addEntry(website: String, url: String, username: String, password: String) throws -> String {
+    public func addEntry(
+        website: String,
+        url: String,
+        username: String,
+        password: String,
+        notes: String? = nil,
+        additionalUrls: [String] = []
+    ) throws -> String {
         var idPtr: UnsafeMutablePointer<CChar>?
-        let result = withCStrings([website, url, username, password]) { ptrs in
-            vault_add_entry(handle, ptrs[0], ptrs[1], ptrs[2], ptrs[3], &idPtr)
+        let joinedUrls = additionalUrls.isEmpty ? nil : additionalUrls.joined(separator: "\n")
+        let result = withCStrings([website, url, username, password, notes, joinedUrls]) { ptrs in
+            vault_add_entry(handle, ptrs[0], ptrs[1], ptrs[2], ptrs[3], ptrs[4], ptrs[5], &idPtr)
         }
         try check(result)
         guard let idPtr else { throw PassError.unknown(detail: nil) }
@@ -97,12 +109,39 @@ public final class Vault: @unchecked Sendable {
 
     /// Update an entry's fields and persist the vault. `website`/`url`/
     /// `username` are always re-supplied (the C API has no partial-update
-    /// form for them); pass `password: nil` to leave the password unchanged.
-    public func updateEntry(id: String, website: String, url: String, username: String, password: String?) throws {
-        let result = withCStrings([id, website, url, username, password]) { ptrs in
-            vault_update_entry(handle, ptrs[0], ptrs[1], ptrs[2], ptrs[3], ptrs[4])
+    /// form for them); pass `nil` for `password`/`notes`/`additionalUrls`
+    /// to leave each unchanged.
+    public func updateEntry(
+        id: String,
+        website: String,
+        url: String,
+        username: String,
+        password: String?,
+        notes: String? = nil,
+        additionalUrls: [String]? = nil
+    ) throws {
+        let joinedUrls = additionalUrls?.joined(separator: "\n")
+        let result = withCStrings([id, website, url, username, password, notes, joinedUrls]) { ptrs in
+            vault_update_entry(handle, ptrs[0], ptrs[1], ptrs[2], ptrs[3], ptrs[4], ptrs[5], ptrs[6])
         }
         try check(result)
+    }
+
+    /// Previous passwords for an entry, newest first — kept automatically
+    /// by the KDBX4 history mechanism.
+    public func passwordHistory(forEntryId id: String) throws -> [PasswordHistoryEntry] {
+        var listPtr: UnsafeMutablePointer<CPasswordHistoryList>?
+        let result = withCStrings([id]) { ptrs in
+            vault_get_entry_history(handle, ptrs[0], &listPtr)
+        }
+        try check(result)
+        guard let listPtr else { return [] }
+        defer { history_list_free(listPtr) }
+
+        let list = listPtr.pointee
+        guard let entriesPtr = list.entries, list.count > 0 else { return [] }
+        let buffer = UnsafeBufferPointer(start: entriesPtr, count: list.count)
+        return buffer.map { PasswordHistoryEntry(cEntry: $0) }
     }
 
     /// Move an entry to the Recycle Bin and persist the vault.

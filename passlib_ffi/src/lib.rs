@@ -56,6 +56,8 @@ pub struct CPasswordEntry {
     pub url: *mut c_char,
     pub username: *mut c_char,
     pub password: *mut c_char,
+    pub notes: *mut c_char,           // "" (never NULL) if empty
+    pub additional_urls: *mut c_char, // newline-separated, "" (never NULL) if none
     pub created_at: i64,      // Unix timestamp
     pub updated_at: i64,      // Unix timestamp
     pub has_totp: bool,
@@ -68,6 +70,34 @@ pub struct CPasswordEntry {
 pub struct CPasswordEntryList {
     pub entries: *mut CPasswordEntry,
     pub count: size_t,
+}
+
+/// One previous password from an entry's KDBX4 history.
+#[repr(C)]
+pub struct CPasswordHistoryEntry {
+    pub password: *mut c_char,
+    pub changed_at: i64, // Unix timestamp
+}
+
+/// C-compatible list of history entries, newest first.
+#[repr(C)]
+pub struct CPasswordHistoryList {
+    pub entries: *mut CPasswordHistoryEntry,
+    pub count: size_t,
+}
+
+/// "" for a NULL/empty pointer, otherwise the parsed UTF-8 string — used
+/// for the optional notes/additionalUrls inputs, where NULL and "" both
+/// mean "nothing".
+unsafe fn from_c_string_or_empty(s: *const c_char) -> String {
+    if s.is_null() {
+        return String::new();
+    }
+    from_c_string(s).unwrap_or_default()
+}
+
+fn split_additional_urls(raw: &str) -> Vec<String> {
+    raw.lines().map(str::trim).filter(|s| !s.is_empty()).map(String::from).collect()
 }
 
 // Helper function to convert Rust string to C string
@@ -180,6 +210,8 @@ pub unsafe extern "C" fn vault_add_entry(
     url: *const c_char,
     username: *const c_char,
     password: *const c_char,
+    notes: *const c_char,           // may be NULL for "no notes"
+    additional_urls: *const c_char, // may be NULL for "none"; newline-separated
     id_out: *mut *mut c_char,
 ) -> PassResult {
     if vault.is_null() {
@@ -208,8 +240,12 @@ pub unsafe extern "C" fn vault_add_entry(
         Ok(s) => s,
         Err(e) => return e,
     };
+    let notes_str = from_c_string_or_empty(notes);
+    let additional_urls_vec = split_additional_urls(&from_c_string_or_empty(additional_urls));
 
-    let entry = PasswordEntry::new(website_str, url_str, username_str, password_str);
+    let mut entry = PasswordEntry::new(website_str, url_str, username_str, password_str);
+    entry.notes = notes_str;
+    entry.additional_urls = additional_urls_vec;
     let id = entry.id.clone();
 
     match vault_ref.add_entry(entry) {
@@ -255,6 +291,8 @@ fn build_c_entry(entry: &PasswordEntry) -> CPasswordEntry {
         url: to_c_string(&entry.url),
         username: to_c_string(&entry.username),
         password: to_c_string(entry.password()),
+        notes: to_c_string(&entry.notes),
+        additional_urls: to_c_string(&entry.additional_urls.join("\n")),
         created_at: entry.created_at.timestamp(),
         updated_at: entry.updated_at.timestamp(),
         has_totp,
@@ -351,6 +389,61 @@ pub unsafe extern "C" fn vault_get_entry(
     }
 }
 
+/// Get an entry's password history (previous passwords, newest first),
+/// kept automatically by the KDBX4 history mechanism.
+///
+/// # Safety
+/// - vault must be a valid CVault pointer
+/// - id must be a valid C string
+/// - list_out must be a valid pointer
+#[no_mangle]
+pub unsafe extern "C" fn vault_get_entry_history(
+    vault: *mut CVault,
+    id: *const c_char,
+    list_out: *mut *mut CPasswordHistoryList,
+) -> PassResult {
+    if vault.is_null() || list_out.is_null() {
+        return PassResult::ErrorInvalidInput;
+    }
+
+    let cvault = &*vault;
+    let vault_ref = match cvault.vault.as_ref() {
+        Some(v) => v,
+        None => return PassResult::ErrorUnknown,
+    };
+
+    let id_str = match from_c_string(id) {
+        Ok(s) => s,
+        Err(e) => return e,
+    };
+
+    match vault_ref.get_entry(&id_str) {
+        Ok(entry) => {
+            let mut c_entries: Vec<CPasswordHistoryEntry> = entry
+                .history
+                .iter()
+                .map(|h| CPasswordHistoryEntry {
+                    password: to_c_string(&h.password),
+                    changed_at: h.changed_at.timestamp(),
+                })
+                .collect();
+
+            let list = Box::new(CPasswordHistoryList {
+                entries: c_entries.as_mut_ptr(),
+                count: c_entries.len(),
+            });
+            std::mem::forget(c_entries);
+            *list_out = Box::into_raw(list);
+            PassResult::Success
+        }
+        Err(passlib::PassError::EntryNotFound(_)) => PassResult::ErrorEntryNotFound,
+        Err(e) => {
+            set_last_error(&e);
+            PassResult::ErrorUnknown
+        }
+    }
+}
+
 /// Update a password entry
 ///
 /// # Safety
@@ -363,7 +456,9 @@ pub unsafe extern "C" fn vault_update_entry(
     website: *const c_char,
     url: *const c_char,
     username: *const c_char,
-    password: *const c_char, // NULL if not updating password
+    password: *const c_char,        // NULL if not updating password
+    notes: *const c_char,           // NULL if not updating notes
+    additional_urls: *const c_char, // NULL if not updating additional URLs; newline-separated
 ) -> PassResult {
     if vault.is_null() {
         return PassResult::ErrorInvalidInput;
@@ -400,6 +495,22 @@ pub unsafe extern "C" fn vault_update_entry(
             Err(e) => return e,
         }
     };
+    let notes_opt = if notes.is_null() {
+        None
+    } else {
+        match from_c_string(notes) {
+            Ok(s) => Some(s),
+            Err(e) => return e,
+        }
+    };
+    let additional_urls_opt = if additional_urls.is_null() {
+        None
+    } else {
+        match from_c_string(additional_urls) {
+            Ok(s) => Some(split_additional_urls(&s)),
+            Err(e) => return e,
+        }
+    };
 
     match vault_ref.update_entry(
         &id_str,
@@ -407,6 +518,8 @@ pub unsafe extern "C" fn vault_update_entry(
         Some(url_str),
         Some(username_str),
         password_opt,
+        notes_opt,
+        additional_urls_opt,
     ) {
         Ok(_) => {
             if let Err(e) = vault_ref.save(&cvault.master_password) {
@@ -652,6 +765,8 @@ pub unsafe extern "C" fn entry_free(entry: *mut CPasswordEntry) {
         string_free(entry.url);
         string_free(entry.username);
         string_free(entry.password);
+        string_free(entry.notes);
+        string_free(entry.additional_urls);
         string_free(entry.totp_code);
     }
 }
@@ -672,7 +787,27 @@ pub unsafe extern "C" fn entry_list_free(list: *mut CPasswordEntryList) {
                 string_free(entry.url);
                 string_free(entry.username);
                 string_free(entry.password);
+                string_free(entry.notes);
+                string_free(entry.additional_urls);
                 string_free(entry.totp_code);
+            }
+            Vec::from_raw_parts(list.entries, list.count, list.count);
+        }
+    }
+}
+
+/// Free a password history list
+///
+/// # Safety
+/// - list must be a valid CPasswordHistoryList pointer or NULL
+#[no_mangle]
+pub unsafe extern "C" fn history_list_free(list: *mut CPasswordHistoryList) {
+    if !list.is_null() {
+        let list = Box::from_raw(list);
+        if !list.entries.is_null() {
+            let entries = slice::from_raw_parts_mut(list.entries, list.count);
+            for entry in entries {
+                string_free(entry.password);
             }
             Vec::from_raw_parts(list.entries, list.count, list.count);
         }

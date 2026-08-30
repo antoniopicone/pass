@@ -1,0 +1,336 @@
+{
+  "extName": {
+    "message": "Pass – Gestore password sicuro"
+  },
+  "extDescription": {
+    "message": "Sblocca, cerca e compila automaticamente il tuo vault Pass locale a conoscenza zero da Chromium."
+  },
+  "field_vault_path": {
+    "message": "Percorso del file vault"
+  },
+  "field_master_password": {
+    "message": "Master password"
+  },
+  "field_website": {
+    "message": "Nome del sito"
+  },
+  "field_url": {
+    "message": "URL"
+  },
+  "field_username": {
+    "message": "Nome utente"
+  },
+  "field_password": {
+    "message": "Password"
+  },
+  "field_password_hint": {
+    "message": "(lascia vuoto per non modificarla)"
+  },
+  "field_notes": {
+    "message": "Note"
+  },
+  "field_notes_placeholder": {
+    "message": "Note opzionali…"
+  },
+  "field_additional_urls": {
+    "message": "Associa anche a questi siti"
+  },
+  "field_additional_urls_short": {
+    "message": "Associato anche a"
+  },
+  "field_additional_urls_hint": {
+    "message": "(uno per riga, opzionale)"
+  },
+  "field_mfa_code": {
+    "message": "Codice MFA"
+  },
+  "action_unlock": {
+    "message": "Sblocca"
+  },
+  "action_create_vault": {
+    "message": "Crea un nuovo vault in questo percorso"
+  },
+  "action_search_entries": {
+    "message": "Cerca voci…"
+  },
+  "action_lock": {
+    "message": "Blocca vault"
+  },
+  "action_add_entry": {
+    "message": "Aggiungi nuova voce"
+  },
+  "action_merge_vault": {
+    "message": "Unisci un'altra copia del vault…"
+  },
+  "action_merge": {
+    "message": "Unisci"
+  },
+  "action_back": {
+    "message": "Indietro"
+  },
+  "action_edit": {
+    "message": "Modifica"
+  },
+  "action_delete": {
+    "message": "Elimina"
+  },
+  "action_cancel": {
+    "message": "Annulla"
+  },
+  "action_save_entry": {
+    "message": "Salva voce"
+  },
+  "action_save_changes": {
+    "message": "Salva modifiche"
+  },
+  "action_show_hide": {
+    "message": "Mostra/nascondi"
+  },
+  "action_show_hide_password": {
+    "message": "Mostra/nascondi password"
+  },
+  "action_generate_password": {
+    "message": "Genera una password sicura"
+  },
+  "action_copy_username": {
+    "message": "Copia nome utente"
+  },
+  "action_copy_password": {
+    "message": "Copia password"
+  },
+  "action_copy_url": {
+    "message": "Copia URL"
+  },
+  "action_fill": {
+    "message": "Compila in questa pagina"
+  },
+  "action_add_mfa": {
+    "message": "+ Aggiungi"
+  },
+  "action_copy": {
+    "message": "Copia"
+  },
+  "merge_title": {
+    "message": "Unisci copia del vault"
+  },
+  "merge_hint": {
+    "message": "Indica una copia sincronizzata del vault (es. dentro una cartella Nextcloud) per importare le modifiche fatte su un altro dispositivo."
+  },
+  "merge_field_path": {
+    "message": "Percorso dell'altro vault"
+  },
+  "add_title": {
+    "message": "Nuova voce"
+  },
+  "detail_title": {
+    "message": "Voce"
+  },
+  "detail_meta": {
+    "message": "Creata il $CREATED$ · Aggiornata il $UPDATED$",
+    "placeholders": {
+      "created": {
+        "content": "$1"
+      },
+      "updated": {
+        "content": "$2"
+      }
+    }
+  },
+  "history_title": {
+    "message": "Cronologia password"
+  },
+  "history_empty": {
+    "message": "Nessuna password precedente."
+  },
+  "history_count": {
+    "message": "$COUNT$ password precedenti",
+    "placeholders": {
+      "count": {
+        "content": "$1"
+      }
+    }
+  },
+  "history_changed_on": {
+    "message": "Cambiata il $DATE$",
+    "placeholders": {
+      "date": {
+        "content": "$1"
+      }
+    }
+  },
+  "status_unlocking": {
+    "message": "Sblocco in corso…"
+  },
+  "status_creating_vault": {
+    "message": "Creazione vault…"
+  },
+  "status_vault_created": {
+    "message": "Vault creato."
+  },
+  "status_vault_path_and_password_required": {
+    "message": "Percorso del vault e master password sono obbligatori."
+  },
+  "status_master_password_min_length": {
+    "message": "La master password deve avere almeno 8 caratteri."
+  },
+  "status_saving": {
+    "message": "Salvataggio…"
+  },
+  "status_entry_saved": {
+    "message": "Voce salvata."
+  },
+  "status_entry_updated": {
+    "message": "Voce aggiornata."
+  },
+  "status_entry_deleted": {
+    "message": "Voce eliminata."
+  },
+  "status_deleting": {
+    "message": "Eliminazione…"
+  },
+  "status_website_username_password_required": {
+    "message": "Sito, nome utente e password sono obbligatori."
+  },
+  "status_website_username_required": {
+    "message": "Sito e nome utente sono obbligatori."
+  },
+  "status_merging": {
+    "message": "Unione in corso…"
+  },
+  "status_merge_done": {
+    "message": "Unione completata — create $CREATED$, aggiornate $UPDATED$, $DELETED$ eliminate.",
+    "placeholders": {
+      "created": {
+        "content": "$1"
+      },
+      "updated": {
+        "content": "$2"
+      },
+      "deleted": {
+        "content": "$3"
+      }
+    }
+  },
+  "status_filling": {
+    "message": "Compilazione…"
+  },
+  "status_filled": {
+    "message": "Compilato."
+  },
+  "status_no_login_form": {
+    "message": "Nessun modulo di accesso trovato in questa pagina."
+  },
+  "status_copying": {
+    "message": "Copia in corso…"
+  },
+  "status_password_copied": {
+    "message": "Password copiata negli appunti."
+  },
+  "status_username_copied": {
+    "message": "Nome utente copiato negli appunti."
+  },
+  "status_url_copied": {
+    "message": "URL copiato negli appunti."
+  },
+  "status_copy_failed": {
+    "message": "Impossibile copiare negli appunti."
+  },
+  "status_fetching_mfa": {
+    "message": "Recupero codice MFA…"
+  },
+  "status_mfa_copied": {
+    "message": "Codice MFA copiato (scade tra $SECONDS$s).",
+    "placeholders": {
+      "seconds": {
+        "content": "$1"
+      }
+    }
+  },
+  "status_mfa_not_configured": {
+    "message": "Nessun codice MFA configurato per questa voce."
+  },
+  "status_adding_mfa": {
+    "message": "Aggiunta codice MFA…"
+  },
+  "status_mfa_added": {
+    "message": "Codice MFA aggiunto."
+  },
+  "status_unknown_error": {
+    "message": "Errore sconosciuto."
+  },
+  "mfa_not_configured": {
+    "message": "Non configurato"
+  },
+  "mfa_prompt_uri": {
+    "message": "Incolla l'URI otpauth:// dalla pagina di configurazione MFA del servizio (di solito dietro un link \"non riesci a scansionare?\" / inserimento manuale):"
+  },
+  "confirm_delete_title": {
+    "message": "Spostare \"$WEBSITE$\" nel Cestino?",
+    "placeholders": {
+      "website": {
+        "content": "$1"
+      }
+    }
+  },
+  "empty_no_entries": {
+    "message": "Nessuna voce ancora. Tocca + per aggiungere la prima password."
+  },
+  "empty_no_matches": {
+    "message": "Nessun risultato."
+  },
+  "entry_match_badge": {
+    "message": "questo sito"
+  },
+  "content_saved_in_pass": {
+    "message": "Salvate in Pass"
+  },
+  "content_suggested_password": {
+    "message": "Password suggerita"
+  },
+  "content_use_suggested_password": {
+    "message": "Usa la password suggerita"
+  },
+  "content_no_saved_logins": {
+    "message": "Nessuna credenziale salvata per questo sito."
+  },
+  "content_unlock_hint": {
+    "message": "Sblocca Pass (icona dell'estensione) per vedere le credenziali salvate per questo sito."
+  },
+  "content_save_title": {
+    "message": "Salvare la password in Pass?"
+  },
+  "content_update_title": {
+    "message": "Aggiornare la password in Pass?"
+  },
+  "content_save_body": {
+    "message": "Salvare $USERNAME$ per $WEBSITE$ nel tuo vault?",
+    "placeholders": {
+      "username": {
+        "content": "$1"
+      },
+      "website": {
+        "content": "$2"
+      }
+    }
+  },
+  "content_update_body": {
+    "message": "Aggiornare la password salvata per $USERNAME$ su $WEBSITE$?",
+    "placeholders": {
+      "username": {
+        "content": "$1"
+      },
+      "website": {
+        "content": "$2"
+      }
+    }
+  },
+  "content_not_now": {
+    "message": "Non ora"
+  },
+  "content_save": {
+    "message": "Salva"
+  },
+  "content_update": {
+    "message": "Aggiorna"
+  }
+}

@@ -1,18 +1,40 @@
 {
   "manifest_version": 3,
-  "name": "Pass – Secure Password Manager",
-  "version": "0.1.0",
-  "description": "Unlock, search and autofill your local, zero-knowledge Pass vault from Chromium.",
-  "permissions": ["nativeMessaging", "activeTab", "storage"],
+  "name": "__MSG_extName__",
+  "version": "0.3.0",
+  "description": "__MSG_extDescription__",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAlr5lDMeb8GSJGqwax6sfC1hQRhZWbnlgbG4yPAy77rFzSqfvu3mTsu/z3O02mm7CNIXgqMAntT2bjJH2jF9bsqJCYEIEEluPAVt9jIsR0Yb7ee/36dlsX0sRvoW4Ra6XnZTYydHnilkx8ml2/5kAj2n6cJsEWfBQHIwoWDn1UbR6xPS8a/77CgVwSpO6oBi8/VsDNDgaVmGHDLe/6Af32i1ElsMltAwCGy2k6DFaVaQAXI6ga7ih+HAjOC/cZ3VdxYrBmd017u+7LDooZW1vNIKNaJOMToJ59ZmHvWprv+u9iev8fKOM7fPQSCrKsocHbXgMZubTyczPDDlWFy/StwIDAQAB",
+  "permissions": [
+    "nativeMessaging",
+    "activeTab",
+    "storage",
+    "scripting",
+    "clipboardWrite",
+    "favicon"
+  ],
+  "host_permissions": [
+    "http://*/*",
+    "https://*/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
   "action": {
     "default_popup": "popup.html",
     "default_title": "Pass"
   },
   "content_scripts": [
     {
-      "matches": ["http://*/*", "https://*/*"],
-      "js": ["content.js"],
-      "run_at": "document_idle"
+      "matches": [
+        "http://*/*",
+        "https://*/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "run_at": "document_idle",
+      "all_frames": true
     }
-  ]
+  ],
+  "default_locale": "en"
 }

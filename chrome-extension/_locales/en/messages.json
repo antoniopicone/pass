@@ -1,0 +1,336 @@
+{
+  "extName": {
+    "message": "Pass – Secure Password Manager"
+  },
+  "extDescription": {
+    "message": "Unlock, search and autofill your local, zero-knowledge Pass vault from Chromium."
+  },
+  "field_vault_path": {
+    "message": "Vault file path"
+  },
+  "field_master_password": {
+    "message": "Master password"
+  },
+  "field_website": {
+    "message": "Website name"
+  },
+  "field_url": {
+    "message": "URL"
+  },
+  "field_username": {
+    "message": "Username"
+  },
+  "field_password": {
+    "message": "Password"
+  },
+  "field_password_hint": {
+    "message": "(leave blank to keep unchanged)"
+  },
+  "field_notes": {
+    "message": "Notes"
+  },
+  "field_notes_placeholder": {
+    "message": "Optional notes…"
+  },
+  "field_additional_urls": {
+    "message": "Also match these sites"
+  },
+  "field_additional_urls_short": {
+    "message": "Also matches"
+  },
+  "field_additional_urls_hint": {
+    "message": "(one per line, optional)"
+  },
+  "field_mfa_code": {
+    "message": "MFA code"
+  },
+  "action_unlock": {
+    "message": "Unlock"
+  },
+  "action_create_vault": {
+    "message": "Create a new vault at this path"
+  },
+  "action_search_entries": {
+    "message": "Search entries…"
+  },
+  "action_lock": {
+    "message": "Lock vault"
+  },
+  "action_add_entry": {
+    "message": "Add new entry"
+  },
+  "action_merge_vault": {
+    "message": "Merge another vault copy…"
+  },
+  "action_merge": {
+    "message": "Merge"
+  },
+  "action_back": {
+    "message": "Back"
+  },
+  "action_edit": {
+    "message": "Edit"
+  },
+  "action_delete": {
+    "message": "Delete"
+  },
+  "action_cancel": {
+    "message": "Cancel"
+  },
+  "action_save_entry": {
+    "message": "Save entry"
+  },
+  "action_save_changes": {
+    "message": "Save changes"
+  },
+  "action_show_hide": {
+    "message": "Show/hide"
+  },
+  "action_show_hide_password": {
+    "message": "Show/hide password"
+  },
+  "action_generate_password": {
+    "message": "Generate a strong password"
+  },
+  "action_copy_username": {
+    "message": "Copy username"
+  },
+  "action_copy_password": {
+    "message": "Copy password"
+  },
+  "action_copy_url": {
+    "message": "Copy URL"
+  },
+  "action_fill": {
+    "message": "Fill on this page"
+  },
+  "action_add_mfa": {
+    "message": "+ Add"
+  },
+  "action_copy": {
+    "message": "Copy"
+  },
+  "merge_title": {
+    "message": "Merge vault copy"
+  },
+  "merge_hint": {
+    "message": "Point this at a synced copy of the vault (e.g. inside your Nextcloud folder) to pull in changes made on another device."
+  },
+  "merge_field_path": {
+    "message": "Other vault path"
+  },
+  "add_title": {
+    "message": "New entry"
+  },
+  "detail_title": {
+    "message": "Entry"
+  },
+  "detail_meta": {
+    "message": "Created $CREATED$ · Updated $UPDATED$",
+    "placeholders": {
+      "created": {
+        "content": "$1"
+      },
+      "updated": {
+        "content": "$2"
+      }
+    }
+  },
+  "history_title": {
+    "message": "Password history"
+  },
+  "history_empty": {
+    "message": "No previous passwords."
+  },
+  "history_count": {
+    "message": "$COUNT$ previous password(s)",
+    "placeholders": {
+      "count": {
+        "content": "$1"
+      }
+    }
+  },
+  "history_changed_on": {
+    "message": "Changed $DATE$",
+    "placeholders": {
+      "date": {
+        "content": "$1"
+      }
+    }
+  },
+  "status_unlocking": {
+    "message": "Unlocking…"
+  },
+  "status_creating_vault": {
+    "message": "Creating vault…"
+  },
+  "status_vault_created": {
+    "message": "Vault created."
+  },
+  "status_vault_path_and_password_required": {
+    "message": "Vault path and master password are required."
+  },
+  "status_master_password_min_length": {
+    "message": "Master password must be at least 8 characters."
+  },
+  "status_saving": {
+    "message": "Saving…"
+  },
+  "status_entry_saved": {
+    "message": "Entry saved."
+  },
+  "status_entry_updated": {
+    "message": "Entry updated."
+  },
+  "status_entry_deleted": {
+    "message": "Entry deleted."
+  },
+  "status_deleting": {
+    "message": "Deleting…"
+  },
+  "status_website_username_password_required": {
+    "message": "Website, username and password are required."
+  },
+  "status_website_username_required": {
+    "message": "Website and username are required."
+  },
+  "status_merging": {
+    "message": "Merging…"
+  },
+  "status_merge_done": {
+    "message": "Merge done — created $CREATED$, updated $UPDATED$, $DELETED$ deleted.",
+    "placeholders": {
+      "created": {
+        "content": "$1"
+      },
+      "updated": {
+        "content": "$2"
+      },
+      "deleted": {
+        "content": "$3"
+      }
+    }
+  },
+  "status_filling": {
+    "message": "Filling…"
+  },
+  "status_filled": {
+    "message": "Filled."
+  },
+  "status_no_login_form": {
+    "message": "No login form found on this page."
+  },
+  "status_copying": {
+    "message": "Copying…"
+  },
+  "status_password_copied": {
+    "message": "Password copied to clipboard."
+  },
+  "status_username_copied": {
+    "message": "Username copied to clipboard."
+  },
+  "status_url_copied": {
+    "message": "URL copied to clipboard."
+  },
+  "status_copy_failed": {
+    "message": "Couldn't copy to clipboard."
+  },
+  "status_fetching_mfa": {
+    "message": "Fetching MFA code…"
+  },
+  "status_mfa_copied": {
+    "message": "MFA code copied (expires in $SECONDS$s).",
+    "placeholders": {
+      "seconds": {
+        "content": "$1"
+      }
+    }
+  },
+  "status_mfa_not_configured": {
+    "message": "No MFA code configured for this entry."
+  },
+  "status_adding_mfa": {
+    "message": "Adding MFA code…"
+  },
+  "status_mfa_added": {
+    "message": "MFA code added."
+  },
+  "status_unknown_error": {
+    "message": "Unknown error."
+  },
+  "mfa_not_configured": {
+    "message": "Not configured"
+  },
+  "mfa_prompt_uri": {
+    "message": "Paste the otpauth:// URI from the service's MFA setup page (usually behind a \"can't scan the code?\" / manual entry link):"
+  },
+  "confirm_delete_title": {
+    "message": "Move \"$WEBSITE$\" to the Recycle Bin?",
+    "placeholders": {
+      "website": {
+        "content": "$1"
+      }
+    }
+  },
+  "empty_no_entries": {
+    "message": "No entries yet. Tap + to add your first password."
+  },
+  "empty_no_matches": {
+    "message": "No matches."
+  },
+  "entry_match_badge": {
+    "message": "this site"
+  },
+  "content_saved_in_pass": {
+    "message": "Saved in Pass"
+  },
+  "content_suggested_password": {
+    "message": "Suggested password"
+  },
+  "content_use_suggested_password": {
+    "message": "Use suggested password"
+  },
+  "content_no_saved_logins": {
+    "message": "No saved logins for this site."
+  },
+  "content_unlock_hint": {
+    "message": "Unlock Pass (extension icon) to see saved logins for this site."
+  },
+  "content_save_title": {
+    "message": "Save password to Pass?"
+  },
+  "content_update_title": {
+    "message": "Update password in Pass?"
+  },
+  "content_save_body": {
+    "message": "Save $USERNAME$ for $WEBSITE$ in your vault?",
+    "placeholders": {
+      "username": {
+        "content": "$1"
+      },
+      "website": {
+        "content": "$2"
+      }
+    }
+  },
+  "content_update_body": {
+    "message": "Update the saved password for $USERNAME$ on $WEBSITE$?",
+    "placeholders": {
+      "username": {
+        "content": "$1"
+      },
+      "website": {
+        "content": "$2"
+      }
+    }
+  },
+  "content_not_now": {
+    "message": "Not now"
+  },
+  "content_save": {
+    "message": "Save"
+  },
+  "content_update": {
+    "message": "Update"
+  }
+}

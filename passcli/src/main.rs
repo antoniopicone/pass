@@ -417,6 +417,8 @@ fn cmd_update(vault_path: &PathBuf, id: &str) -> Result<()> {
         Some(url),
         Some(username),
         password,
+        None,
+        None,
     ).context("Failed to update entry")?;
 
     vault.save(&master_password)
@@ -1134,7 +1136,7 @@ fn interactive_edit(vault: &mut Vault, master_password: &str) -> Result<()> {
         None
     };
 
-    vault.update_entry(&entry_id, Some(website), Some(url), Some(username), password)?;
+    vault.update_entry(&entry_id, Some(website), Some(url), Some(username), password, None, None)?;
     vault.save(master_password)?;
 
     println!();

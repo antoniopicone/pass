@@ -15,7 +15,7 @@
 //!   last-modification time — no custom merge algorithm needed here
 //!   anymore.
 
-use crate::entry::{PasswordEntry, PasswordEntrySummary};
+use crate::entry::{PasswordEntry, PasswordEntrySummary, PasswordHistoryEntry};
 use crate::error::{PassError, Result};
 use crate::totp::{self, TotpConfig};
 use chrono::{DateTime, NaiveDateTime, Utc};
@@ -28,6 +28,25 @@ use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
 const RECYCLE_BIN_GROUP_NAME: &str = "Recycle Bin";
+
+/// Custom KDBX string field holding this entry's extra URLs (beyond the
+/// standard `URL` field), newline-separated. Not a real KeePassXC feature —
+/// KDBX4 has no native "multiple URLs" field — just a plain custom
+/// attribute, so it shows up (and is editable) as one in KeePassXC/any
+/// other KDBX tool, they just won't know to match against it themselves.
+const ADDITIONAL_URLS_FIELD: &str = "Pass_AdditionalURLs";
+
+fn encode_additional_urls(urls: &[String]) -> String {
+    urls.join("\n")
+}
+
+fn decode_additional_urls(raw: &str) -> Vec<String> {
+    raw.lines()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(String::from)
+        .collect()
+}
 
 /// An open (decrypted) KDBX4 password vault.
 #[derive(Debug)]
@@ -111,6 +130,12 @@ impl Vault {
             e.set_unprotected(fields::URL, entry.url.clone());
             e.set_unprotected(fields::USERNAME, entry.username.clone());
             e.set_protected(fields::PASSWORD, entry.password().to_string());
+            if !entry.notes.is_empty() {
+                e.set_unprotected(fields::NOTES, entry.notes.clone());
+            }
+            if !entry.additional_urls.is_empty() {
+                e.set_unprotected(ADDITIONAL_URLS_FIELD, encode_additional_urls(&entry.additional_urls));
+            }
             if let Some(totp) = &entry.totp {
                 e.set_unprotected(fields::OTP, totp.to_otpauth_uri());
             }
@@ -169,7 +194,11 @@ impl Vault {
         Ok(())
     }
 
-    /// Update an existing entry
+    /// Update an existing entry. `password`, if present, is archived into
+    /// the entry's KDBX4 history automatically — the same `track_changes`
+    /// mechanism KeePassXC itself relies on for its own history — so past
+    /// passwords stay recoverable via [`Vault::get_entry`]'s `history`.
+    #[allow(clippy::too_many_arguments)]
     pub fn update_entry(
         &mut self,
         id: &str,
@@ -177,6 +206,8 @@ impl Vault {
         url: Option<String>,
         username: Option<String>,
         password: Option<String>,
+        notes: Option<String>,
+        additional_urls: Option<Vec<String>>,
     ) -> Result<()> {
         let entry_id = parse_entry_id(id)?;
         self.require_active_entry(entry_id, id)?;
@@ -198,6 +229,12 @@ impl Vault {
         }
         if let Some(p) = password {
             tracked.set_protected(fields::PASSWORD, p);
+        }
+        if let Some(n) = notes {
+            tracked.set_unprotected(fields::NOTES, n);
+        }
+        if let Some(urls) = additional_urls {
+            tracked.set_unprotected(ADDITIONAL_URLS_FIELD, encode_additional_urls(&urls));
         }
 
         Ok(())
@@ -345,8 +382,57 @@ fn to_password_entry(entry: &EntryRef) -> PasswordEntry {
     let created_at = entry.times.creation.map(to_utc).unwrap_or_else(Utc::now);
     let updated_at = entry.times.last_modification.map(to_utc).unwrap_or(created_at);
     let totp = entry.get_raw_otp_value().and_then(|uri| totp::parse_otpauth_uri(uri).ok());
+    let notes = entry.get(fields::NOTES).unwrap_or_default().to_string();
+    let additional_urls = entry
+        .get(ADDITIONAL_URLS_FIELD)
+        .map(decode_additional_urls)
+        .unwrap_or_default();
+    let history = read_password_history(entry, &password, created_at);
 
-    PasswordEntry::from_parts(id, website, url, username, password, created_at, updated_at, totp)
+    PasswordEntry::from_parts(
+        id,
+        website,
+        url,
+        username,
+        password,
+        created_at,
+        updated_at,
+        totp,
+        notes,
+        additional_urls,
+        history,
+    )
+}
+
+/// Previous passwords from the KDBX4 history, newest first, deduplicated
+/// so an edit that didn't touch the password (notes, username, ...) — which
+/// still archives a snapshot via `track_changes` — doesn't show up as a
+/// fake password change.
+fn read_password_history(
+    entry: &EntryRef,
+    current_password: &str,
+    fallback_time: DateTime<Utc>,
+) -> Vec<PasswordHistoryEntry> {
+    let mut history: Vec<PasswordHistoryEntry> = entry
+        .history
+        .as_ref()
+        .map(|h| {
+            h.get_entries()
+                .iter()
+                .filter_map(|old| {
+                    let password = old.get_password()?.to_string();
+                    let changed_at = old.times.last_modification.map(to_utc).unwrap_or(fallback_time);
+                    Some(PasswordHistoryEntry { password, changed_at })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    history.dedup_by(|a, b| a.password == b.password);
+    if history.first().is_some_and(|h| h.password == current_password) {
+        history.remove(0);
+    }
+    history
 }
 
 /// A wrong master password surfaces as `DatabaseOpenError::Key(DatabaseKeyError::IncorrectKey)`.
@@ -544,7 +630,7 @@ mod tests {
         // times only have second resolution).
         std::thread::sleep(std::time::Duration::from_secs(1));
         vault_a
-            .update_entry(&shared_id, None, None, None, Some("new_password".to_string()))
+            .update_entry(&shared_id, None, None, None, Some("new_password".to_string()), None, None)
             .unwrap();
         vault_a.save(master_password).unwrap();
 
@@ -555,5 +641,119 @@ mod tests {
         assert_eq!(summary.created, 1); // GitLab entry from device B
         assert_eq!(vault_a.len(), 2);
         assert_eq!(vault_a.get_entry(&shared_id).unwrap().password(), "new_password");
+    }
+
+    #[test]
+    fn test_notes_and_additional_urls_roundtrip() {
+        let path = temp_vault_path();
+        let master_password = "test_password";
+        let mut vault = Vault::init(&path, master_password).unwrap();
+
+        let mut entry = PasswordEntry::new(
+            "Apple".to_string(),
+            "https://appleid.apple.com".to_string(),
+            "user@example.com".to_string(),
+            "pass".to_string(),
+        );
+        entry.notes = "Recovery key: XXXX-XXXX".to_string();
+        entry.additional_urls = vec!["https://icloud.com".to_string(), "https://account.apple.com".to_string()];
+        let id = vault.add_entry(entry).unwrap();
+        vault.save(master_password).unwrap();
+
+        let vault = Vault::unlock(&path, master_password).unwrap();
+        let retrieved = vault.get_entry(&id).unwrap();
+        assert_eq!(retrieved.notes, "Recovery key: XXXX-XXXX");
+        assert_eq!(
+            retrieved.additional_urls,
+            vec!["https://icloud.com".to_string(), "https://account.apple.com".to_string()]
+        );
+        assert_eq!(
+            retrieved.all_urls().collect::<Vec<_>>(),
+            vec!["https://appleid.apple.com", "https://icloud.com", "https://account.apple.com"]
+        );
+    }
+
+    #[test]
+    fn test_update_notes_and_additional_urls() {
+        let path = temp_vault_path();
+        let master_password = "test_password";
+        let mut vault = Vault::init(&path, master_password).unwrap();
+
+        let entry = PasswordEntry::new(
+            "Apple".to_string(),
+            "https://appleid.apple.com".to_string(),
+            "user@example.com".to_string(),
+            "pass".to_string(),
+        );
+        let id = vault.add_entry(entry).unwrap();
+
+        vault
+            .update_entry(
+                &id,
+                None,
+                None,
+                None,
+                None,
+                Some("updated notes".to_string()),
+                Some(vec!["https://icloud.com".to_string()]),
+            )
+            .unwrap();
+
+        let updated = vault.get_entry(&id).unwrap();
+        assert_eq!(updated.notes, "updated notes");
+        assert_eq!(updated.additional_urls, vec!["https://icloud.com".to_string()]);
+    }
+
+    #[test]
+    fn test_password_history_tracks_previous_passwords() {
+        let path = temp_vault_path();
+        let master_password = "test_password";
+        let mut vault = Vault::init(&path, master_password).unwrap();
+
+        let entry = PasswordEntry::new(
+            "GitHub".to_string(),
+            "https://github.com".to_string(),
+            "user".to_string(),
+            "first_password".to_string(),
+        );
+        let id = vault.add_entry(entry).unwrap();
+        assert!(vault.get_entry(&id).unwrap().history.is_empty());
+
+        vault
+            .update_entry(&id, None, None, None, Some("second_password".to_string()), None, None)
+            .unwrap();
+        vault
+            .update_entry(&id, None, None, None, Some("third_password".to_string()), None, None)
+            .unwrap();
+
+        let current = vault.get_entry(&id).unwrap();
+        assert_eq!(current.password(), "third_password");
+        let history_passwords: Vec<&str> = current.history.iter().map(|h| h.password.as_str()).collect();
+        assert_eq!(history_passwords, vec!["second_password", "first_password"]);
+    }
+
+    #[test]
+    fn test_password_history_ignores_non_password_edits() {
+        let path = temp_vault_path();
+        let master_password = "test_password";
+        let mut vault = Vault::init(&path, master_password).unwrap();
+
+        let entry = PasswordEntry::new(
+            "GitHub".to_string(),
+            "https://github.com".to_string(),
+            "user".to_string(),
+            "only_password".to_string(),
+        );
+        let id = vault.add_entry(entry).unwrap();
+
+        // A notes-only edit still archives a snapshot via track_changes,
+        // but it shouldn't look like a password change in the history.
+        vault
+            .update_entry(&id, None, None, None, None, Some("a note".to_string()), None)
+            .unwrap();
+
+        let current = vault.get_entry(&id).unwrap();
+        assert_eq!(current.password(), "only_password");
+        assert!(current.history.is_empty(), "notes-only edit should not create fake password history");
     }
 }
