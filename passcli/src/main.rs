@@ -4,9 +4,21 @@ use colored::*;
 use dialoguer::{Confirm, Input, Password};
 use notify::{Event, RecursiveMode, Watcher};
 use passlib::{PasswordEntry, Vault};
+use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::time::Duration;
+
+mod access;
+mod agentcmd;
+mod gencmd;
+mod quickunlock;
+mod quickunlockcmd;
+mod runcmd;
+mod sharecmd;
+mod sshcmd;
+mod synccmd;
+mod typecmd;
 
 const DEFAULT_VAULT_PATH: &str = "passwords.kdbx";
 
@@ -31,7 +43,23 @@ enum Commands {
     Init,
     
     /// Add a new password entry
-    Add,
+    ///
+    /// With no flags this prompts for each field. Supplying --website makes
+    /// it non-interactive, so entries can be added from a script.
+    Add {
+        #[arg(long)]
+        website: Option<String>,
+
+        #[arg(long, default_value = "")]
+        url: String,
+
+        #[arg(long, default_value = "")]
+        username: String,
+
+        /// Generate the password instead of asking for one, and print it
+        #[arg(long)]
+        generate: bool,
+    },
     
     /// List all password entries (without showing passwords)
     List,
@@ -85,6 +113,123 @@ enum Commands {
 
     /// Interactive mode - menu-driven interface for managing passwords
     Interactive,
+
+    /// Run and control the background agent that holds the vault unlocked
+    Agent {
+        #[command(subcommand)]
+        action: agentcmd::AgentAction,
+    },
+
+    /// Unlock the vault in the running agent (once, instead of per command)
+    Unlock {
+        /// Auto-lock after this many minutes of inactivity; 0 to never
+        #[arg(long)]
+        idle_minutes: Option<u64>,
+
+        /// Unlock with the quick-unlock PIN instead of the master password
+        #[arg(long)]
+        pin: bool,
+    },
+
+    /// Lock the vault in the running agent
+    Lock,
+
+    /// Show what the agent is holding
+    Status,
+
+    /// Manage SSH keys stored in the vault and served over an SSH agent
+    Ssh {
+        #[command(subcommand)]
+        action: sshcmd::SshAction,
+    },
+
+    /// Set up a short PIN (and optionally a fingerprint) to unlock the vault
+    QuickUnlock {
+        #[command(subcommand)]
+        action: quickunlockcmd::QuickUnlockAction,
+    },
+
+    /// Run a command with secrets injected into its environment
+    Run {
+        /// VAR=entry[:field] — repeatable. Field is one of
+        /// password (default), username, totp, notes.
+        #[arg(long = "secret", value_name = "VAR=ENTRY[:FIELD]", required = true)]
+        secrets: Vec<String>,
+
+        /// The command to run, after `--`
+        #[arg(last = true, required = true)]
+        command: Vec<String>,
+    },
+
+    /// Type an entry's credentials into the focused window
+    Type {
+        /// Entry ID or search term
+        query: String,
+
+        /// Type only the password, not username + Tab + password
+        #[arg(long)]
+        password_only: bool,
+
+        /// Also type Tab and the current MFA code
+        #[arg(long)]
+        with_totp: bool,
+
+        /// Press Enter at the end
+        #[arg(long)]
+        submit: bool,
+
+        /// Wait this many milliseconds before typing, to focus the window
+        #[arg(long, default_value_t = 1000)]
+        delay_ms: u64,
+
+        /// Show what would be typed (secrets redacted) without typing it
+        #[arg(long)]
+        dry_run: bool,
+    },
+
+    /// Share entries with someone, with no server involved
+    Share {
+        #[command(subcommand)]
+        action: sharecmd::ShareAction,
+    },
+
+    /// Replicate this vault between your own devices, with no server
+    Sync {
+        #[command(subcommand)]
+        action: synccmd::SyncAction,
+    },
+
+    /// Generate a password or passphrase
+    Gen {
+        /// Characters (or words, with --passphrase)
+        #[arg(short, long, default_value_t = 20)]
+        length: usize,
+
+        #[arg(long)]
+        no_symbols: bool,
+
+        #[arg(long)]
+        no_digits: bool,
+
+        #[arg(long)]
+        no_uppercase: bool,
+
+        /// Allow visually ambiguous characters (l, I, 1, O, 0)
+        #[arg(long)]
+        allow_ambiguous: bool,
+
+        /// Generate a word-based passphrase instead
+        #[arg(long)]
+        passphrase: bool,
+
+        /// Separator between passphrase words
+        #[arg(long, default_value = "-")]
+        separator: String,
+
+        /// How many to generate
+        #[arg(short, long, default_value_t = 1)]
+        count: usize,
+    },
 }
 
 #[derive(Subcommand)]
@@ -123,7 +268,12 @@ fn main() -> Result<()> {
     let _ = colored::control::set_virtual_terminal(true);
     match cli.command {
         Commands::Init => cmd_init(&cli.vault),
-        Commands::Add => cmd_add(&cli.vault),
+        Commands::Add {
+            website,
+            url,
+            username,
+            generate,
+        } => cmd_add(&cli.vault, website, url, username, generate),
         Commands::List => cmd_list(&cli.vault),
         Commands::Get { query } => cmd_get(&cli.vault, &query),
         Commands::Delete { id } => cmd_delete(&cli.vault, &id),
@@ -136,6 +286,59 @@ fn main() -> Result<()> {
             debounce_ms,
         } => cmd_watch(&cli.vault, &other, &publish, debounce_ms),
         Commands::Interactive => cmd_interactive(&cli.vault),
+
+        Commands::Agent { action } => agentcmd::cmd_agent(action),
+        Commands::Unlock { idle_minutes, pin } => {
+            if pin {
+                quickunlockcmd::unlock_with_pin(&cli.vault, idle_minutes)
+            } else {
+                agentcmd::cmd_unlock(&cli.vault, idle_minutes)
+            }
+        }
+        Commands::Lock => agentcmd::cmd_lock(),
+        Commands::Status => agentcmd::cmd_agent(agentcmd::AgentAction::Status),
+        Commands::Ssh { action } => sshcmd::cmd_ssh(&cli.vault, action),
+        Commands::QuickUnlock { action } => quickunlockcmd::cmd_quick_unlock(&cli.vault, action),
+        Commands::Run { secrets, command } => runcmd::cmd_run(&cli.vault, &secrets, &command),
+        Commands::Type {
+            query,
+            password_only,
+            with_totp,
+            submit,
+            delay_ms,
+            dry_run,
+        } => typecmd::cmd_type(
+            &cli.vault,
+            &query,
+            &typecmd::TypeOptions {
+                password_only,
+                with_totp,
+                submit,
+                delay: Duration::from_millis(delay_ms),
+                dry_run,
+            },
+        ),
+        Commands::Share { action } => sharecmd::cmd_share(&cli.vault, action),
+        Commands::Sync { action } => synccmd::cmd_sync(&cli.vault, action),
+        Commands::Gen {
+            length,
+            no_symbols,
+            no_digits,
+            no_uppercase,
+            allow_ambiguous,
+            passphrase,
+            separator,
+            count,
+        } => gencmd::cmd_gen(
+            length,
+            no_symbols,
+            no_digits,
+            no_uppercase,
+            allow_ambiguous,
+            passphrase,
+            separator,
+            count,
+        ),
     }
 }
 
@@ -154,11 +357,17 @@ fn cmd_init(vault_path: &PathBuf) -> Result<()> {
     println!("  • Choose a strong, memorable passphrase");
     println!();
 
-    let master_password = Password::new()
-        .with_prompt("Enter master password")
-        .with_confirmation("Confirm master password", "Passwords don't match")
-        .interact()
-        .context("Failed to read master password")?;
+    // Ask twice only when there is a terminal to ask twice on; piped input
+    // (a script, a systemd askpass helper) supplies the password once.
+    let master_password = if std::io::stdin().is_terminal() {
+        Password::new()
+            .with_prompt("Enter master password")
+            .with_confirmation("Confirm master password", "Passwords don't match")
+            .interact()
+            .context("Failed to read master password")?
+    } else {
+        access::prompt_secret("Master password")?
+    };
 
     if master_password.len() < 8 {
         anyhow::bail!("Master password must be at least 8 characters long");
@@ -176,7 +385,13 @@ fn cmd_init(vault_path: &PathBuf) -> Result<()> {
 }
 
 /// Add a new password entry
-fn cmd_add(vault_path: &PathBuf) -> Result<()> {
+fn cmd_add(
+    vault_path: &PathBuf,
+    website_arg: Option<String>,
+    url_arg: String,
+    username_arg: String,
+    generate: bool,
+) -> Result<()> {
     println!("{}", "➕ Add New Password Entry".bold().cyan());
     println!();
 
@@ -185,26 +400,33 @@ fn cmd_add(vault_path: &PathBuf) -> Result<()> {
         .context("Failed to unlock vault (wrong password?)")?;
 
     println!();
-    let website = Input::<String>::new()
-        .with_prompt("Website name")
-        .interact_text()
-        .context("Failed to read website name")?;
+    let (website, url, username) = match website_arg {
+        Some(website) => (website, url_arg, username_arg),
+        None => (
+            Input::<String>::new()
+                .with_prompt("Website name")
+                .interact_text()
+                .context("Failed to read website name")?,
+            Input::<String>::new()
+                .with_prompt("URL")
+                .with_initial_text("https://")
+                .interact_text()
+                .context("Failed to read URL")?,
+            Input::<String>::new()
+                .with_prompt("Username/Email")
+                .interact_text()
+                .context("Failed to read username")?,
+        ),
+    };
 
-    let url = Input::<String>::new()
-        .with_prompt("URL")
-        .with_initial_text("https://")
-        .interact_text()
-        .context("Failed to read URL")?;
-
-    let username = Input::<String>::new()
-        .with_prompt("Username/Email")
-        .interact_text()
-        .context("Failed to read username")?;
-
-    let password = Password::new()
-        .with_prompt("Password")
-        .interact()
-        .context("Failed to read password")?;
+    let password = if generate {
+        let generated = passlib::generate_password(&passlib::GeneratorOptions::default())
+            .context("Failed to generate a password")?;
+        println!("{}: {}", "Generated password".bold(), generated.green().bold());
+        generated.to_string()
+    } else {
+        access::prompt_secret("Password")?
+    };
 
     let entry = PasswordEntry::new(website.clone(), url, username, password);
     let id = vault.add_entry(entry)
@@ -259,7 +481,7 @@ fn cmd_list(vault_path: &PathBuf) -> Result<()> {
 }
 
 /// Find an entry by ID, falling back to a case-insensitive website search
-fn find_entry(vault: &Vault, query: &str) -> Result<PasswordEntry> {
+pub(crate) fn find_entry(vault: &Vault, query: &str) -> Result<PasswordEntry> {
     vault
         .get_entry(query)
         .or_else(|_| {
@@ -746,10 +968,7 @@ fn run_merge(
 
 /// Prompt for master password securely
 fn prompt_master_password() -> Result<String> {
-    Password::new()
-        .with_prompt("Master password")
-        .interact()
-        .context("Failed to read master password")
+    access::prompt_secret("Master password")
 }
 
 #[cfg(test)]

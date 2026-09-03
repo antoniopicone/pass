@@ -25,6 +25,18 @@ pub enum PassError {
 
     #[error("TOTP error: {0}")]
     TotpError(String),
+
+    #[error("Secure memory error: {0}")]
+    SecureMemory(String),
+
+    #[error("SSH key error: {0}")]
+    SshKey(String),
+
+    #[error("Sharing error: {0}")]
+    Share(String),
+
+    #[error("Sync error: {0}")]
+    Sync(String),
 }
 
 pub type Result<T> = std::result::Result<T, PassError>;

@@ -38,11 +38,21 @@
 
 pub mod entry;
 pub mod error;
+pub mod generator;
+pub mod secmem;
+pub mod share;
+pub mod sshkey;
+pub mod sync;
 pub mod totp;
 pub mod vault;
 
 // Re-export main types
 pub use entry::{PasswordEntry, PasswordEntrySummary};
 pub use error::{PassError, Result};
+pub use generator::{generate_password, GeneratorOptions};
+pub use secmem::{SecretBuf, Shielded};
+pub use share::{ShareBundle, ShareIdentity, SharedEntry};
+pub use sshkey::{SshKey, SshKeySummary};
+pub use sync::{DeviceIdentity, SyncEntry, SyncKey};
 pub use totp::{TotpAlgorithm, TotpConfig};
-pub use vault::{MergeSummary, Vault};
+pub use vault::{MergeSummary, ShareContact, SyncDevice, Vault};

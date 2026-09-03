@@ -9,13 +9,29 @@ license.workspace = true
 keepass = { version = "0.13.20", features = ["save_kdbx4", "totp", "_merge"] }
 zeroize.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 chrono.workspace = true
 uuid.workspace = true
 thiserror.workspace = true
+rand.workspace = true
 hmac = "0.13.0"
 sha1 = "0.11.0"
 sha2 = "0.11.0"
 base32 = "0.5.1"
+
+# Memory hardening: mlock/VirtualLock + MADV_DONTDUMP (see `secmem`)
+memsec = "0.7"
+# In-RAM encryption of the vault key while idle (see `secmem::Shielded`)
+chacha20poly1305 = "0.10"
+# SSH keys stored in the vault, KeePassXC/KeeAgent-compatible (see `sshkey`)
+ssh-key = { version = "0.6.7", features = ["ed25519", "rsa", "p256", "encryption", "getrandom", "std"] }
+ssh-encoding = "0.2"
+signature = "2"
+# Serverless entry sharing, sealed to a recipient's public key (see `share`)
+x25519-dalek = { version = "2", features = ["static_secrets"] }
+# Op signatures for peer-to-peer sync: who wrote this change (see `sync`)
+ed25519-dalek = "2"
+base64 = "0.22"
 
 [dev-dependencies]
 tempfile = "3.8"

@@ -7,4 +7,5 @@ pass-apple/PassKitFFI.xcframework/
 chrome-extension/native-host/com.antoniopicone.pass_native_host.json
 chrome-extension/tests/.venv/
 __pycache__/
+dist
 

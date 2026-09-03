@@ -1,0 +1,23 @@
+[package]
+name = "pass-agent"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Background agent holding the pass vault unlocked, with an OpenSSH-compatible agent"
+
+[dependencies]
+passlib = { path = "../passlib" }
+serde.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+thiserror.workspace = true
+base64 = "0.22"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+tempfile = "3.8"
+ssh-key = { version = "0.6.7", features = ["ed25519", "std"] }
+signature = "2"

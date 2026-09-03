@@ -1,6 +1,6 @@
 use crate::totp::TotpConfig;
 use chrono::{DateTime, Utc};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 use zeroize::Zeroizing;
 
@@ -49,7 +49,7 @@ pub struct PasswordEntry {
 }
 
 /// One previous version of an entry's password, from the KDBX4 history.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PasswordHistoryEntry {
     pub password: String,
@@ -146,7 +146,7 @@ impl PasswordEntry {
 }
 
 /// Summary view of a password entry (without the actual password)
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PasswordEntrySummary {
     pub id: String,

@@ -109,7 +109,7 @@ pub fn show_edit_dialog(
             let result = match &existing_id {
                 Some(id) => unlocked
                     .vault
-                    .update_entry(id, Some(website), Some(url), Some(username), Some(password))
+                    .update_entry(id, Some(website), Some(url), Some(username), Some(password), None, None)
                     .map(|_| ()),
                 None => {
                     let entry = passlib::PasswordEntry::new(website, url, username, password);
