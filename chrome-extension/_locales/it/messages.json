@@ -56,6 +56,21 @@
   "action_lock": {
     "message": "Blocca vault"
   },
+  "action_unlock_with_face": {
+    "message": "Sblocca con il viso"
+  },
+  "banner_enable_face_unlock": {
+    "message": "Attivare lo sblocco con il viso?"
+  },
+  "action_enable": {
+    "message": "Attiva"
+  },
+  "action_not_now": {
+    "message": "Non ora"
+  },
+  "status_face_unlock_enabled": {
+    "message": "Sblocco con il viso attivato per questo vault."
+  },
   "action_add_entry": {
     "message": "Aggiungi nuova voce"
   },

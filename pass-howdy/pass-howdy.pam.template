@@ -1,0 +1,18 @@
+# Installed by pass's top-level install.sh at /etc/pam.d/pass-howdy.
+#
+# An isolated PAM service used only by pass-howdy (see
+# pass-howdy/src/lib.rs) to gate "unlock with your face" — it is never
+# referenced by sudo, login, or any other system authentication path, and
+# nothing else on this system should be pointed at it.
+#
+# `sufficient`: a successful face match (via howdy) immediately succeeds
+# the whole stack, no further modules consulted. `required pam_deny.so`:
+# anything else (no face match, no camera, howdy misconfigured) always
+# denies — deliberately no fallback to a system password prompt here;
+# pass's own master-password prompt is the fallback, one layer up.
+auth sufficient __PAM_HOWDY_MODULE_PATH__
+auth required pam_deny.so
+
+# No actual account/session state to manage for this service, but PAM
+# requires every applicable module type to resolve to something.
+account required pam_permit.so

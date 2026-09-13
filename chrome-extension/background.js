@@ -122,6 +122,20 @@ const handlers = {
     return { ...state, importedCount: res.importedCount || 0 };
   },
 
+  /** The vault path to prefill the locked screen with: the last one
+   *  successfully unlocked/created by *any* pass client on this machine
+   *  (CLI, GNOME, or this extension), or ~/.vaults/personal.kdbx if there
+   *  isn't one yet. Falls back to that same fixed default if the native
+   *  host itself is missing/unreachable. */
+  async PASS_GET_DEFAULT_VAULT_PATH() {
+    try {
+      const res = await sendNative({ cmd: "getDefaultVaultPath" });
+      return { vaultPath: res.vaultPath || "" };
+    } catch {
+      return { vaultPath: "" };
+    }
+  },
+
   /** Whether pass-syncd already knows of an existing synced vault on this
    *  network (some other device set one up first) — used by the
    *  create-vault screen to decide whether to offer importing its entries
@@ -135,6 +149,37 @@ const handlers = {
     } catch {
       return { available: false };
     }
+  },
+
+  /** Whether the locked screen should offer "unlock with your face"
+   *  (`canUnlock`) and/or whether the list view should offer enabling it
+   *  after the next manual unlock (`canEnroll`) — see pass-howdy. Never
+   *  throws, same "nothing to offer" fallback as PASS_CHECK_SYNC_IMPORT. */
+  async PASS_HOWDY_STATUS({ vaultPath }) {
+    try {
+      const res = await sendNative({ cmd: "howdyStatus", vaultPath });
+      return { canUnlock: !!res.canUnlock, canEnroll: !!res.canEnroll };
+    } catch {
+      return { canUnlock: false, canEnroll: false };
+    }
+  },
+
+  /** Authenticates via howdy and, on success, unlocks the vault — the
+   *  native host retrieves the actual master password from the OS keyring
+   *  itself (gated by the face match) and hands it back here so this
+   *  session can work exactly like one from a manual unlock. */
+  async PASS_HOWDY_UNLOCK({ vaultPath }) {
+    const res = await sendNative({ cmd: "howdyUnlock", vaultPath });
+    session = { vaultPath, masterPassword: res.masterPassword, unlockedAt: Date.now(), entries: res.entries || [] };
+    await persistSession();
+    return publicState();
+  },
+
+  /** Enables face unlock for the currently-unlocked vault. */
+  async PASS_HOWDY_ENROLL() {
+    if (!isSessionValid()) throw new Error("Locked.");
+    await sendNative({ cmd: "howdyEnroll", vaultPath: session.vaultPath, masterPassword: session.masterPassword });
+    return {};
   },
 
   async PASS_LOCK() {

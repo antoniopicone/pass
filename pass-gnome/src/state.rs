@@ -18,14 +18,12 @@ pub struct AppState {
 
 impl AppState {
     pub fn new() -> Self {
-        let default_path = dirs_home().join("passwords.kdbx");
         Self {
-            vault_path: default_path,
+            // The last vault successfully unlocked/created (by this app or
+            // any other pass client — see passlib::recent), or
+            // ~/.vaults/personal.kdbx if there isn't one yet.
+            vault_path: passlib::propose_vault_path(),
             unlocked: None,
         }
     }
-}
-
-fn dirs_home() -> PathBuf {
-    std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("."))
 }

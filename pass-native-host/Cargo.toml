@@ -12,5 +12,6 @@ path = "src/main.rs"
 [dependencies]
 chrono.workspace = true
 passlib = { path = "../passlib" }
+pass-howdy = { path = "../pass-howdy" }
 serde = { workspace = true }
 serde_json = { workspace = true }

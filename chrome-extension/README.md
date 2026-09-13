@@ -226,6 +226,18 @@ responding" fits its existing design. The **Merge** panel in the popup is
 still there too, but it's now positioned as a one-off import tool for an
 unrelated KDBX file, not the cross-device sync mechanism.
 
+## Face unlock (Linux)
+
+On Linux, the locked screen offers "Unlock with your face" once enabled —
+see [`pass-howdy/README.md`](../pass-howdy/README.md) for the full design
+(and its trade-off: the master password ends up stored in the OS keyring,
+gated by a howdy face match, since howdy itself derives no key). Nothing
+here talks to howdy directly: the popup calls `PASS_HOWDY_STATUS`/
+`PASS_HOWDY_UNLOCK`/`PASS_HOWDY_ENROLL` in `background.js`, which forward
+to `pass-native-host`'s `howdyStatus`/`howdyUnlock`/`howdyEnroll` commands
+— the native host is what actually authenticates via PAM and reads/writes
+the keyring, same as every other client.
+
 ## Limitations / not included here
 
 - The save/update prompt's "is this a login/signup submission" detection is
