@@ -41,5 +41,14 @@ struct RootView: View {
         } message: { _ in
             Text("Unlock this vault with \(BiometricUnlock.biometryLabel()) next time instead of typing your master password.")
         }
+        .alert(
+            "Import from synced device?",
+            isPresented: $state.syncImportOffer
+        ) {
+            Button("Import") { state.importFromSync() }
+            Button("Not Now", role: .cancel) {}
+        } message: {
+            Text("pass-syncd found an existing vault already synced on this network. Import its entries now?")
+        }
     }
 }

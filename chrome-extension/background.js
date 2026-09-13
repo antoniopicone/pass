@@ -116,9 +116,25 @@ const handlers = {
     return publicState();
   },
 
-  async PASS_INIT_VAULT({ vaultPath, masterPassword }) {
-    await sendNative({ cmd: "initVault", vaultPath, masterPassword });
-    return handlers.PASS_UNLOCK({ vaultPath, masterPassword });
+  async PASS_INIT_VAULT({ vaultPath, masterPassword, importFromSync }) {
+    const res = await sendNative({ cmd: "initVault", vaultPath, masterPassword, importFromSync: !!importFromSync });
+    const state = await handlers.PASS_UNLOCK({ vaultPath, masterPassword });
+    return { ...state, importedCount: res.importedCount || 0 };
+  },
+
+  /** Whether pass-syncd already knows of an existing synced vault on this
+   *  network (some other device set one up first) — used by the
+   *  create-vault screen to decide whether to offer importing its entries
+   *  instead of always starting empty. Never throws: a native host that's
+   *  missing/unreachable just means "nothing to offer," same as pass-syncd
+   *  itself not running. */
+  async PASS_CHECK_SYNC_IMPORT() {
+    try {
+      const res = await sendNative({ cmd: "checkSyncImportAvailable" });
+      return { available: !!res.available };
+    } catch {
+      return { available: false };
+    }
   },
 
   async PASS_LOCK() {

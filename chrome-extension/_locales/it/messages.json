@@ -167,6 +167,17 @@
   "status_vault_created": {
     "message": "Vault creato."
   },
+  "status_vault_created_with_import": {
+    "message": "Vault creato — importate $COUNT$ voci dal vault sincronizzato.",
+    "placeholders": {
+      "count": {
+        "content": "$1"
+      }
+    }
+  },
+  "field_import_from_sync": {
+    "message": "Importa le voci da un altro dispositivo sincronizzato"
+  },
   "status_vault_path_and_password_required": {
     "message": "Percorso del vault e master password sono obbligatori."
   },

@@ -69,6 +69,7 @@ fn handle(request: &Value) -> Value {
     let result = match cmd {
         "ping" => Ok(json!({ "pong": true })),
         "vaultExists" => vault_exists(request),
+        "checkSyncImportAvailable" => check_sync_import_available(request),
         "initVault" => init_vault(request),
         "unlockVault" => unlock_vault(request),
         "getEntry" => get_entry(request),
@@ -141,11 +142,36 @@ fn vault_exists(req: &Value) -> Result<Value, String> {
     Ok(json!({ "exists": std::path::Path::new(path).exists() }))
 }
 
+/// Checks whether `pass-syncd` already knows of an existing synced vault on
+/// this network (some other device set one up first), without needing a
+/// vault open yet. The popup can call this before showing an "import from
+/// another device?" option on the create-vault screen.
+fn check_sync_import_available(_req: &Value) -> Result<Value, String> {
+    Ok(json!({ "available": passlib::sync::discover_existing_salt().is_some() }))
+}
+
+/// `importFromSync: true` (optional; default false) additionally imports
+/// entries from an existing synced vault on this network right after
+/// creating the new one — see [`passlib::sync::import_from_sync`]. The
+/// response's `importedCount` is `0` if nothing was found to import (not
+/// requested, or `pass-syncd` unreachable/empty), otherwise how many
+/// entries were pulled in.
 fn init_vault(req: &Value) -> Result<Value, String> {
     let path = field(req, "vaultPath")?;
     let password = field(req, "masterPassword")?;
-    Vault::init(path, password).map_err(|e| e.to_string())?;
-    Ok(json!({}))
+    let import_from_sync = req.get("importFromSync").and_then(Value::as_bool).unwrap_or(false);
+
+    let mut vault = Vault::init(path, password).map_err(|e| e.to_string())?;
+
+    let mut imported_count = 0;
+    if import_from_sync {
+        if let Some(n) = passlib::sync::import_from_sync(&mut vault, password) {
+            vault.save(password).map_err(|e| e.to_string())?;
+            imported_count = n;
+        }
+    }
+
+    Ok(json!({ "importedCount": imported_count }))
 }
 
 fn unlock_vault(req: &Value) -> Result<Value, String> {

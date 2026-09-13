@@ -355,6 +355,19 @@ impl Vault {
         let mut salt = [0u8; SYNC_SALT_LEN];
         use aes_gcm::aead::rand_core::{OsRng, RngCore};
         OsRng.fill_bytes(&mut salt);
+        self.set_sync_salt(salt);
+        salt
+    }
+
+    /// Sets this vault's sync salt to a specific value rather than
+    /// generating a random one — used by [`crate::sync::import_from_sync`]
+    /// when joining a vault another device already set up for sync, where
+    /// the salt must match exactly (it's part of the key derivation, not
+    /// just a randomizer) rather than being freshly, and incompatibly,
+    /// generated. Overwrites any existing salt — callers own making sure
+    /// that's actually what they want (it always is for a brand-new vault,
+    /// which is the only place `import_from_sync` calls this from).
+    pub fn set_sync_salt(&mut self, salt: [u8; SYNC_SALT_LEN]) {
         self.db.meta.custom_data.insert(
             SYNC_SALT_KEY.to_string(),
             CustomDataItem {
@@ -362,7 +375,6 @@ impl Vault {
                 last_modification_time: Some(Times::now()),
             },
         );
-        salt
     }
 
     fn recycle_bin_id(&self) -> Option<GroupId> {

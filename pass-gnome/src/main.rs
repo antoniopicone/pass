@@ -203,6 +203,7 @@ fn build_ui(app: &adw::Application) {
     {
         let state = state.clone();
         let ui = ui.clone();
+        let window = window.clone();
         let header_title = header_title_for_updates.clone();
         create_btn.connect_clicked(move |_| {
             let path = PathBuf::from(ui.vault_path_entry.text().to_string());
@@ -221,10 +222,11 @@ fn build_ui(app: &adw::Application) {
                     {
                         let mut s = state.borrow_mut();
                         s.vault_path = path;
-                        s.unlocked = Some(Unlocked { vault, master_password: password });
+                        s.unlocked = Some(Unlocked { vault, master_password: password.clone() });
                     }
                     refresh_list(&state, &ui);
                     ui.stack.set_visible_child_name("unlocked");
+                    offer_sync_import(&state, &ui, &window, password);
                 }
                 Err(e) => ui.locked_status.set_text(&format!("{e}")),
             }
@@ -353,6 +355,53 @@ fn build_ui(app: &adw::Application) {
     }
 
     window.present();
+}
+
+/// Right after creating a brand-new vault: if `pass-syncd` already knows
+/// of an existing synced vault on this network (some other device set one
+/// up first), offers to import its entries immediately instead of leaving
+/// the new vault empty — see `passlib::sync::import_from_sync`. Silently
+/// does nothing if there's nothing to offer (daemon unreachable, or
+/// reachable but genuinely empty) rather than showing a pointless dialog.
+fn offer_sync_import(state: &Rc<RefCell<AppState>>, ui: &Ui, window: &adw::ApplicationWindow, password: String) {
+    if passlib::sync::discover_existing_salt().is_none() {
+        return;
+    }
+
+    let confirm = gtk::AlertDialog::builder()
+        .message("Import from synced device?")
+        .detail("pass-syncd found an existing vault already synced on this network. Import its entries now?")
+        .buttons(["Not now", "Import"])
+        .cancel_button(0)
+        .default_button(1)
+        .build();
+
+    let state = state.clone();
+    let ui = ui.clone();
+    confirm.choose(Some(window), gio::Cancellable::NONE, move |result| {
+        if result != Ok(1) {
+            return;
+        }
+        let mut s = state.borrow_mut();
+        let Some(unlocked) = s.unlocked.as_mut() else { return };
+        let imported = passlib::sync::import_from_sync(&mut unlocked.vault, &password);
+        match imported {
+            Some(n) => {
+                if let Err(e) = unlocked.vault.save(&password) {
+                    drop(s);
+                    ui.toasts.add_toast(adw::Toast::new(&format!("Failed to save imported entries: {e}")));
+                    return;
+                }
+                drop(s);
+                refresh_list(&state, &ui);
+                ui.toasts.add_toast(adw::Toast::new(&format!("Imported {n} entries from the synced vault")));
+            }
+            None => {
+                drop(s);
+                ui.toasts.add_toast(adw::Toast::new("No existing synced vault found"));
+            }
+        }
+    });
 }
 
 /// Rebuild the entry list box from the vault, applying the current search

@@ -111,6 +111,15 @@ pass-apple/
   polls it every 3s while unlocked; every mutating `Vault` method already
   pushes its own change automatically (baked into `passlib_ffi` itself), so
   nothing on the Swift side needed to change for that half.
+- **Joining an existing synced vault from scratch.** Right after
+  `AppState.createVault` succeeds, `Vault.checkSyncImportAvailable()`
+  (`vault_check_sync_import_available`, no vault handle needed) checks
+  whether `pass-syncd` already knows of one from another device; if so,
+  `RootView`'s `syncImportOffer` alert offers `Vault.importFromSync()`
+  (`vault_import_from_sync`), which adopts that vault's exact sync salt
+  and pulls in every entry the mesh has — see the main README's
+  "Cross-device sync" section and `pass-syncd/README.md`'s "Joining from a
+  brand-new device".
 - **iOS file picking copies into the app's own Documents directory**
   (`AppState.importVaultFile`) rather than holding onto a security-scoped
   URL across the whole session, since the vault stays "open" across many

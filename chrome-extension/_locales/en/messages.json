@@ -167,6 +167,17 @@
   "status_vault_created": {
     "message": "Vault created."
   },
+  "status_vault_created_with_import": {
+    "message": "Vault created — imported $COUNT$ entry/entries from the synced vault.",
+    "placeholders": {
+      "count": {
+        "content": "$1"
+      }
+    }
+  },
+  "field_import_from_sync": {
+    "message": "Import entries from another synced device"
+  },
   "status_vault_path_and_password_required": {
     "message": "Vault path and master password are required."
   },

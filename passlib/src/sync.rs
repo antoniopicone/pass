@@ -21,6 +21,25 @@
 //! running must never break normal single-device use of the vault, so
 //! every network failure here is swallowed (after a best-effort log line),
 //! never propagated as an error to the caller.
+//!
+//! # Joining an existing synced vault from a brand-new device
+//!
+//! [`import_from_sync`] is the other direction: for a vault with no
+//! entries yet, it checks whether `pass-syncd` already knows this vault's
+//! salt (pushed by some other device that set it up first — see
+//! [`SyncHandle::push_upsert`]/`push_delete`, which both push it alongside
+//! every real change) and, if so, adopts that exact salt and immediately
+//! pulls in every entry the mesh currently has, instead of generating an
+//! incompatible random salt of its own the way [`crate::vault::Vault::init`]
+//! plus [`crate::vault::Vault::ensure_sync_salt`] would. This is what makes
+//! `pass init` on a fresh device able to hydrate itself from devices
+//! already on the same tailnet/LAN, without ever needing the vault file
+//! copied there by hand first.
+//!
+//! The salt itself is the one value here that travels **unencrypted**:
+//! like any KDF salt, it's not a secret by design (what protects entry
+//! contents is the master password combined with it, never the salt's own
+//! secrecy) — see [`SyncHandle::push_upsert`]'s doc comment.
 
 use crate::entry::PasswordEntry;
 use crate::totp::TotpConfig;
@@ -41,6 +60,11 @@ use std::time::Duration;
 const DEFAULT_PORT: u16 = 47210;
 const KEY_LEN: usize = 32;
 const REQUEST_TIMEOUT: Duration = Duration::from_millis(800);
+
+/// Reserved entity id carrying this vault's sync salt (base64 of the raw 16
+/// bytes, unencrypted — see the module doc comment). Never collides with a
+/// real entry's entity id, which is always a lowercase UUID.
+const SALT_ENTITY: &str = "__pass_sync_salt__";
 
 /// `~/.pass-syncd` — must match `pass-syncd`'s own `persist::default_data_dir`
 /// exactly, since this is how a client finds a daemon that isn't on the
@@ -188,6 +212,7 @@ fn save_state(vault_path: &Path, state: &SyncState) {
 pub struct SyncHandle {
     base_url: String,
     key: [u8; KEY_LEN],
+    salt: [u8; 16],
     vault_path: PathBuf,
     client: reqwest::blocking::Client,
 }
@@ -213,7 +238,7 @@ impl SyncHandle {
             .timeout(REQUEST_TIMEOUT)
             .build()
             .unwrap_or_else(|_| reqwest::blocking::Client::new());
-        Self { base_url, key, vault_path: vault_path.to_path_buf(), client }
+        Self { base_url, key, salt, vault_path: vault_path.to_path_buf(), client }
     }
 
     /// Convenience constructor reading the salt straight off an already
@@ -248,11 +273,25 @@ impl SyncHandle {
         cipher.decrypt(Nonce::from_slice(nonce_bytes), ciphertext).ok()
     }
 
-    /// Pushes an add/update as the new full state of this entry. Best-effort:
-    /// logs and swallows any failure (daemon not installed/not running,
-    /// network hiccup) rather than surfacing it, since local vault edits
-    /// must always succeed regardless of sync's availability.
+    /// Pushes an add/update as the new full state of this entry, alongside
+    /// this vault's sync salt (see [`SALT_ENTITY`]) — cheap and idempotent
+    /// (same value every time from this device's point of view), and it's
+    /// what lets [`import_from_sync`] find the salt from a brand-new device
+    /// that has no vault file yet. Best-effort: logs and swallows any
+    /// failure (daemon not installed/not running, network hiccup) rather
+    /// than surfacing it, since local vault edits must always succeed
+    /// regardless of sync's availability.
+    ///
+    /// The salt itself travels unencrypted — unlike every entry payload,
+    /// which is always AES-256-GCM-encrypted first. This is deliberate,
+    /// not an oversight: a KDF salt is not a secret by design (the same
+    /// reason password hashes are stored right next to their salt), so
+    /// there's nothing to protect by encrypting it, and doing so would
+    /// only reintroduce the chicken-and-egg problem `import_from_sync`
+    /// exists to avoid — a new device needs the salt *before* it can
+    /// derive the key that would otherwise decrypt it.
     pub fn push_upsert(&self, entry: &PasswordEntry) {
+        self.push_salt();
         let payload = EntryPayload::from(entry);
         let Ok(json) = serde_json::to_vec(&payload) else { return };
         let Some(blob) = self.encrypt(&json) else {
@@ -262,10 +301,16 @@ impl SyncHandle {
         self.write(&entry.id, Some(blob));
     }
 
-    /// Pushes a deletion. See [`SyncHandle::push_upsert`] for the
-    /// best-effort/never-fails contract.
+    /// Pushes a deletion (and this vault's sync salt, see
+    /// [`SyncHandle::push_upsert`]). Best-effort/never-fails, same
+    /// contract as `push_upsert`.
     pub fn push_delete(&self, id: &str) {
+        self.push_salt();
         self.write(id, None);
+    }
+
+    fn push_salt(&self) {
+        self.write(SALT_ENTITY, Some(BASE64.encode(self.salt)));
     }
 
     fn write(&self, entity: &str, value: Option<String>) {
@@ -308,6 +353,9 @@ impl SyncHandle {
         let mut seen_now: HashSet<String> = HashSet::new();
 
         for entry in &state.entries {
+            if entry.entity == SALT_ENTITY {
+                continue; // not a password entry — see push_upsert/push_delete
+            }
             seen_now.insert(entry.entity.clone());
             let Some(value) = &entry.value else { continue };
             let Some(plaintext) = self.decrypt(value) else {
@@ -342,6 +390,45 @@ impl SyncHandle {
 
         changed
     }
+}
+
+/// Checks whether the locally running `pass-syncd` already knows a sync
+/// salt for this vault — i.e. some other device has already pushed at
+/// least one change since setting this same vault up for sync — without
+/// needing an already-open [`Vault`] (there isn't one yet, for the
+/// "join an existing synced vault" flow [`import_from_sync`] is for).
+/// Returns `None`, indistinguishably, if the daemon is unreachable *or* no
+/// device has pushed anything yet: both mean "nothing to import," the
+/// normal case for a genuinely first vault, which should just get a fresh
+/// random salt from [`crate::vault::Vault::ensure_sync_salt`] instead.
+pub fn discover_existing_salt() -> Option<[u8; 16]> {
+    let base_url = resolve_base_url();
+    let client = reqwest::blocking::Client::builder().timeout(REQUEST_TIMEOUT).build().ok()?;
+    let state: StateResp = client.get(format!("{base_url}/state")).send().ok()?.error_for_status().ok()?.json().ok()?;
+    let value = state.entries.iter().find(|e| e.entity == SALT_ENTITY)?.value.as_ref()?;
+    BASE64.decode(value).ok()?.try_into().ok()
+}
+
+/// For a brand-new vault (typically right after [`crate::vault::Vault::init`],
+/// before anything has been added to it): if [`discover_existing_salt`]
+/// finds that some other device already set this same vault up for sync,
+/// adopts that exact salt (via [`crate::vault::Vault::set_sync_salt`]) and
+/// immediately pulls in every entry the mesh currently has for it. This is
+/// what lets a brand-new device hydrate itself over the tailnet/LAN
+/// without the vault file ever having to be copied there by hand first.
+///
+/// Returns `None` if there was nothing to import (daemon unreachable, or
+/// no device has set this vault up for sync yet) — the caller should treat
+/// that the same as "start empty," not as an error. `Some(count)` on
+/// success, where `count` (possibly `0`, if the salt exists but the mesh
+/// genuinely has no live entries right now) is how many entries were
+/// imported. Does **not** call [`Vault::save`]; the caller does, same as
+/// every other mutating call in this crate.
+pub fn import_from_sync(vault: &mut Vault, master_password: &str) -> Option<usize> {
+    let salt = discover_existing_salt()?;
+    vault.set_sync_salt(salt);
+    let handle = SyncHandle::new(vault.path(), salt, master_password);
+    Some(handle.pull_and_apply(vault))
 }
 
 /// Applies one entity's resolved remote payload into `vault`: full
@@ -431,12 +518,14 @@ mod tests {
 
     /// A minimal single-purpose HTTP/1.1 server standing in for
     /// `pass-syncd`'s local API in tests: `GET /state` always returns the
-    /// body currently held in `state_body`, `POST /write` always answers
+    /// body currently held in `state_body`, `POST /write` records the
+    /// request body (so tests can assert on what got pushed) and answers
     /// `200 {}`. Good enough for exercising `SyncHandle` without pulling in
     /// a real HTTP server crate as a dev-dependency just for this.
     struct MockSyncd {
         addr: String,
         state_body: Arc<Mutex<String>>,
+        writes: Arc<Mutex<Vec<serde_json::Value>>>,
     }
 
     impl MockSyncd {
@@ -445,6 +534,8 @@ mod tests {
             let addr = listener.local_addr().unwrap().to_string();
             let state_body = Arc::new(Mutex::new(String::from(r#"{"device":"d","entries":[],"vv":{},"fingerprint":"empty"}"#)));
             let state_body_thread = state_body.clone();
+            let writes = Arc::new(Mutex::new(Vec::new()));
+            let writes_thread = writes.clone();
 
             std::thread::spawn(move || {
                 for stream in listener.incoming() {
@@ -455,11 +546,19 @@ mod tests {
                         Err(_) => continue,
                     };
                     let request = String::from_utf8_lossy(&buf[..n]);
-                    let path = request.lines().next().unwrap_or("").split_whitespace().nth(1).unwrap_or("");
+                    let mut lines = request.split("\r\n\r\n");
+                    let head = lines.next().unwrap_or("");
+                    let request_body = lines.next().unwrap_or("");
+                    let path = head.lines().next().unwrap_or("").split_whitespace().nth(1).unwrap_or("");
 
                     let body = if path.starts_with("/state") {
                         state_body_thread.lock().unwrap().clone()
                     } else {
+                        if path.starts_with("/write") {
+                            if let Ok(v) = serde_json::from_str::<serde_json::Value>(request_body) {
+                                writes_thread.lock().unwrap().push(v);
+                            }
+                        }
                         "{}".to_string()
                     };
                     let response = format!(
@@ -471,11 +570,15 @@ mod tests {
                 }
             });
 
-            Self { addr, state_body }
+            Self { addr, state_body, writes }
         }
 
         fn set_state(&self, body: String) {
             *self.state_body.lock().unwrap() = body;
+        }
+
+        fn writes(&self) -> Vec<serde_json::Value> {
+            self.writes.lock().unwrap().clone()
         }
     }
 
@@ -564,6 +667,87 @@ mod tests {
         let changed = handle.pull_and_apply(&mut vault);
         assert_eq!(changed, 0);
         assert_eq!(vault.len(), 1);
+
+        std::env::remove_var("PASS_SYNCD_URL");
+    }
+
+    #[test]
+    fn push_upsert_and_push_delete_also_push_the_salt_entity() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let mock = MockSyncd::start();
+        std::env::set_var("PASS_SYNCD_URL", format!("http://{}", mock.addr));
+
+        let handle = SyncHandle::new(&temp_vault_path(), [9u8; 16], "pw");
+        let entry = PasswordEntry::new("GitHub".into(), "https://github.com".into(), "me".into(), "pw".into());
+        handle.push_upsert(&entry);
+        handle.push_delete(&entry.id);
+
+        let writes = mock.writes();
+        let salt_writes: Vec<_> = writes.iter().filter(|w| w["entity"] == SALT_ENTITY).collect();
+        assert_eq!(salt_writes.len(), 2, "both push_upsert and push_delete should push the salt entity");
+        assert_eq!(salt_writes[0]["value"], BASE64.encode([9u8; 16]));
+
+        let entry_writes: Vec<_> = writes.iter().filter(|w| w["entity"] == entry.id).collect();
+        assert_eq!(entry_writes.len(), 2);
+        assert!(entry_writes[0]["value"].is_string()); // upsert: encrypted blob
+        assert!(entry_writes[1]["value"].is_null()); // delete
+
+        std::env::remove_var("PASS_SYNCD_URL");
+    }
+
+    #[test]
+    fn discover_existing_salt_finds_nothing_on_an_empty_mesh() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let mock = MockSyncd::start();
+        std::env::set_var("PASS_SYNCD_URL", format!("http://{}", mock.addr));
+
+        mock.set_state(serde_json::json!({
+            "device": "other", "vv": {}, "fingerprint": "f1", "entries": [],
+        }).to_string());
+        assert!(discover_existing_salt().is_none());
+
+        std::env::remove_var("PASS_SYNCD_URL");
+    }
+
+    #[test]
+    fn import_from_sync_adopts_the_discovered_salt_and_hydrates_a_brand_new_vault() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let mock = MockSyncd::start();
+        std::env::set_var("PASS_SYNCD_URL", format!("http://{}", mock.addr));
+
+        let salt = [3u8; 16];
+        let master_password = "shared_master_password";
+        // Another device already pushed its salt and one entry.
+        let remote_handle = SyncHandle::new(&temp_vault_path(), salt, master_password);
+        let payload = EntryPayload {
+            website: "GitHub".into(),
+            url: "https://github.com".into(),
+            username: "octocat".into(),
+            password: "hunter2".into(),
+            notes: String::new(),
+            additional_urls: Vec::new(),
+            totp: None,
+        };
+        let blob = remote_handle.encrypt(&serde_json::to_vec(&payload).unwrap()).unwrap();
+        mock.set_state(serde_json::json!({
+            "device": "other", "vv": {"other": 2}, "fingerprint": "f1",
+            "entries": [
+                {"entity": SALT_ENTITY, "value": BASE64.encode(salt)},
+                {"entity": "22222222-2222-4222-8222-222222222222", "value": blob},
+            ],
+        }).to_string());
+
+        // A brand-new, empty vault with no salt of its own yet.
+        let path = temp_vault_path();
+        let mut vault = Vault::init(&path, master_password).unwrap();
+        assert!(vault.sync_salt().is_none());
+
+        let imported = import_from_sync(&mut vault, master_password);
+        assert_eq!(imported, Some(1));
+        assert_eq!(vault.sync_salt(), Some(salt));
+        let entry = vault.get_entry("22222222-2222-4222-8222-222222222222").unwrap();
+        assert_eq!(entry.website, "GitHub");
+        assert_eq!(entry.password(), "hunter2");
 
         std::env::remove_var("PASS_SYNCD_URL");
     }

@@ -32,6 +32,12 @@ final class AppState: ObservableObject {
         let password: String
     }
 
+    /// Set right after successfully creating a brand-new vault when
+    /// `pass-syncd` already knows of an existing synced vault on this
+    /// network (see `Vault.checkSyncImportAvailable`), so `RootView` can
+    /// offer to import its entries instead of leaving the new vault empty.
+    @Published var syncImportOffer: Bool = false
+
     private var vault: Vault?
 
     /// Polls the local `pass-syncd` daemon for other devices' changes while
@@ -80,6 +86,21 @@ final class AppState: ObservableObject {
             try reload()
             offerBiometricEnrollmentIfNeeded(password: password)
             startSyncTimer()
+            syncImportOffer = Vault.checkSyncImportAvailable()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    /// Adopts an existing synced vault's entries into this brand-new one —
+    /// see `Vault.importFromSync`. Called from the alert `syncImportOffer`
+    /// triggers.
+    func importFromSync() {
+        guard let vault else { return }
+        do {
+            let n = try vault.importFromSync()
+            try reload()
+            statusMessage = n > 0 ? "Imported \(n) entr\(n == 1 ? "y" : "ies") from the synced vault." : nil
         } catch {
             errorMessage = error.localizedDescription
         }

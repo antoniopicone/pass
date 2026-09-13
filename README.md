@@ -230,10 +230,19 @@ cd pass-syncd/service
 .\install-windows.ps1  # Windows (PowerShell)
 ```
 
-Then put the same vault file (copied once by hand, same master password) on
-each device and open it with any client — pairing over the tailnet is
-automatic, and every add/update/delete syncs from then on. Check status any
-time with `pass sync`.
+Then, on the first device, create or open the vault as usual. On every
+device after that — no need to copy the vault file over by hand — use the
+same master password and:
+
+```bash
+pass init --import-from-sync
+```
+
+(or tick the equivalent "import from another synced device" option on the
+GNOME/Chromium/Apple create-vault screen). Pairing over the tailnet is
+automatic; the new device picks up every existing entry immediately, and
+every add/update/delete syncs from then on. Check status any time with
+`pass sync`.
 
 This isn't for importing an *unrelated* KDBX file (e.g. a database someone
 else sent you) — `pass merge <other-file.kdbx>` still handles that one-off

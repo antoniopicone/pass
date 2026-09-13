@@ -53,6 +53,8 @@ const els = {
   masterPassword: document.getElementById("master-password"),
   unlockBtn: document.getElementById("unlock-btn"),
   initBtn: document.getElementById("init-btn"),
+  importFromSyncRow: document.getElementById("import-from-sync-row"),
+  importFromSync: document.getElementById("import-from-sync"),
   lockBtn: document.getElementById("lock-btn"),
   status: document.getElementById("status"),
   search: document.getElementById("search"),
@@ -132,6 +134,20 @@ async function init() {
   } else {
     els.vaultPath.value = "passwords.kdbx";
     showView("locked-view");
+    checkSyncImportAvailable();
+  }
+}
+
+/** Shows the "import from another synced device" checkbox on the
+ *  create-vault screen only when there's actually something to import —
+ *  pass-syncd not being installed/running just means the row stays
+ *  hidden, same as everywhere else this feature degrades silently. */
+async function checkSyncImportAvailable() {
+  try {
+    const { available } = await sendToBackground("PASS_CHECK_SYNC_IMPORT");
+    els.importFromSyncRow.hidden = !available;
+  } catch {
+    els.importFromSyncRow.hidden = true;
   }
 }
 
@@ -353,9 +369,15 @@ els.initBtn.addEventListener("click", async () => {
 
   setStatus(t("status_creating_vault"));
   try {
-    state = await sendToBackground("PASS_INIT_VAULT", { vaultPath, masterPassword });
+    const importFromSync = !els.importFromSyncRow.hidden && els.importFromSync.checked;
+    const result = await sendToBackground("PASS_INIT_VAULT", { vaultPath, masterPassword, importFromSync });
+    state = result;
     els.masterPassword.value = "";
-    setStatus(t("status_vault_created"));
+    setStatus(
+      result.importedCount > 0
+        ? t("status_vault_created_with_import", [String(result.importedCount)])
+        : t("status_vault_created")
+    );
     showList();
   } catch (e) {
     setStatus(e.message, true);

@@ -812,6 +812,60 @@ pub unsafe extern "C" fn vault_sync_pull(vault: *mut CVault, applied_out: *mut s
     PassResult::Success
 }
 
+/// Checks whether `pass-syncd` already knows of an existing synced vault on
+/// this network (some other device set one up first) — no vault handle
+/// needed, since this is meant to be called right after `vault_init` shows
+/// its "create vault" screen, before there's a `CVault` yet. The Swift
+/// layer can use this to decide whether to offer
+/// `vault_import_from_sync` at all.
+#[no_mangle]
+pub extern "C" fn vault_check_sync_import_available() -> bool {
+    passlib::sync::discover_existing_salt().is_some()
+}
+
+/// For a brand-new vault (right after `vault_init`, before anything has
+/// been added to it): if some other device already set this same vault up
+/// for sync, adopts its exact salt and immediately pulls in every entry
+/// the mesh currently has — see [`passlib::sync::import_from_sync`].
+/// `imported_out` (if non-NULL) receives how many entries were imported,
+/// `0` if there was nothing to import (daemon unreachable, or reachable
+/// but genuinely empty) — that's `PassResult::Success` too, not an error,
+/// same non-fatal-by-design contract as `vault_sync_pull`.
+///
+/// # Safety
+/// - vault must be a valid CVault pointer
+/// - imported_out, if non-NULL, must be a valid `size_t` pointer
+#[no_mangle]
+pub unsafe extern "C" fn vault_import_from_sync(vault: *mut CVault, imported_out: *mut size_t) -> PassResult {
+    if vault.is_null() {
+        return PassResult::ErrorInvalidInput;
+    }
+
+    let cvault = &mut *vault;
+    let vault_ref = match cvault.vault.as_mut() {
+        Some(v) => v,
+        None => return PassResult::ErrorUnknown,
+    };
+
+    let imported = match passlib::sync::import_from_sync(vault_ref, &cvault.master_password) {
+        Some(n) => {
+            if n > 0 {
+                if let Err(e) = vault_ref.save(&cvault.master_password) {
+                    set_last_error(&e);
+                    return PassResult::ErrorUnknown;
+                }
+            }
+            n
+        }
+        None => 0,
+    };
+
+    if !imported_out.is_null() {
+        *imported_out = imported;
+    }
+    PassResult::Success
+}
+
 /// Free a vault instance
 ///
 /// # Safety

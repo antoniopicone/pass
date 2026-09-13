@@ -25,8 +25,14 @@ struct Cli {
 #[derive(Subcommand)]
 enum Commands {
     /// Initialize a new password vault
-    Init,
-    
+    Init {
+        /// If pass-syncd finds an existing vault already synced on this
+        /// network (same tailnet/LAN), import its entries immediately
+        /// instead of starting empty — skips the interactive prompt.
+        #[arg(long)]
+        import_from_sync: bool,
+    },
+
     /// Add a new password entry
     Add,
     
@@ -109,7 +115,7 @@ fn main() -> Result<()> {
     #[cfg(windows)]
     let _ = colored::control::set_virtual_terminal(true);
     match cli.command {
-        Commands::Init => cmd_init(&cli.vault),
+        Commands::Init { import_from_sync } => cmd_init(&cli.vault, import_from_sync),
         Commands::Add => cmd_add(&cli.vault),
         Commands::List => cmd_list(&cli.vault),
         Commands::Get { query } => cmd_get(&cli.vault, &query),
@@ -122,8 +128,11 @@ fn main() -> Result<()> {
     }
 }
 
-/// Initialize a new vault
-fn cmd_init(vault_path: &PathBuf) -> Result<()> {
+/// Initialize a new vault. If `pass-syncd` is running and already knows a
+/// synced vault on this network — some other device set one up first — the
+/// user can import its entries right away instead of starting empty; see
+/// [`passlib::sync::import_from_sync`].
+fn cmd_init(vault_path: &PathBuf, import_from_sync: bool) -> Result<()> {
     println!("{}", "🔐 Initialize New Password Vault".bold().cyan());
     println!();
 
@@ -147,12 +156,39 @@ fn cmd_init(vault_path: &PathBuf) -> Result<()> {
         anyhow::bail!("Master password must be at least 8 characters long");
     }
 
-    Vault::init(vault_path, &master_password)
+    let mut vault = Vault::init(vault_path, &master_password)
         .context("Failed to initialize vault")?;
 
     println!();
     println!("{}", "✅ Vault created successfully!".green().bold());
     println!("   Location: {}", vault_path.display());
+
+    // `discover_existing_salt` returns None both when pass-syncd isn't
+    // reachable and when it's reachable but genuinely has nothing yet —
+    // either way there's nothing to offer importing, so the prompt only
+    // shows up when it's actually useful.
+    let found_existing_sync = passlib::sync::discover_existing_salt().is_some();
+    let should_import = import_from_sync
+        || (found_existing_sync
+            && Confirm::new()
+                .with_prompt("pass-syncd found an existing vault already synced on this network — import its entries now?")
+                .default(true)
+                .interact()
+                .unwrap_or(false));
+
+    if should_import {
+        match passlib::sync::import_from_sync(&mut vault, &master_password) {
+            Some(n) => {
+                vault.save(&master_password).context("Failed to save imported entries")?;
+                println!(
+                    "{}",
+                    format!("🔄 Imported {n} entr{} from the synced vault.", if n == 1 { "y" } else { "ies" }).green()
+                );
+            }
+            None => println!("{}", "No existing synced vault found on this network.".yellow()),
+        }
+    }
+
     println!();
 
     Ok(())

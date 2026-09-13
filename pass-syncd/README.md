@@ -65,6 +65,34 @@ reading-list-syncd's: replicate opaque blobs by `entity` (a password
 entry's UUID) with last-writer-wins semantics (see `core.rs`), never
 inspecting `value`.
 
+The one exception is the salt itself, replicated under the reserved entity
+id `__pass_sync_salt__` alongside every real push — see "Joining from a
+brand-new device" below for why, and why that's fine: a KDF salt isn't a
+secret by design (the same reason a password hash is stored right next to
+its own salt), so it's the one value `passlib::sync` ever sends
+unencrypted. Everything else stays exactly as opaque to this daemon as
+described above.
+
+## Joining from a brand-new device
+
+A new device doesn't need the vault file copied to it by hand first. As
+long as its `pass-syncd` can reach at least one existing device's (over the
+tailnet/LAN — no vault, no client needed for this part, it's pure
+daemon-to-daemon anti-entropy), running `pass init --import-from-sync` (or
+the equivalent option on the GNOME/Chromium/Apple create-vault screen)
+there:
+
+1. Creates the new, empty vault as usual.
+2. Notices the salt entity above is already present (some other device
+   pushed it) and adopts that exact salt instead of generating an
+   incompatible random one of its own.
+3. Immediately pulls in every entry the mesh currently has, decrypting them
+   with the key that salt (plus the master password just typed) derives.
+
+Without `--import-from-sync` (or on a genuinely first device, where there's
+nothing to import), `pass init` behaves exactly as before: an empty vault,
+with its own sync salt generated lazily on the first add/update/delete.
+
 ## The CSV ledger
 
 One row per accepted change (local or synced from a peer), appended as it
@@ -122,11 +150,14 @@ daemon ever needs to defend a genuinely untrusted LAN.
    (or the same trusted LAN, with `--no-lan-discovery` left off). No further
    pairing step is required — the anti-entropy loop finds peers via the
    tailnet, LAN broadcast, and peer exchange automatically.
-3. Open the same vault (same file, copied once by hand, and same master
-   password) on each device with any `pass` client — the CLI, the GNOME
-   app, the Chromium extension, or the Apple app. From then on, every
-   change made while the vault is unlocked propagates to the other devices
-   within one anti-entropy round (a few seconds).
+3. On the first device, open (or create) the vault with any `pass`
+   client — the CLI, the GNOME app, the Chromium extension, or the Apple
+   app. On every device after that, use the same master password and
+   `pass init --import-from-sync` (or the equivalent create-vault option
+   elsewhere) instead of copying the vault file by hand — see "Joining
+   from a brand-new device" above. From then on, every change made while
+   the vault is unlocked propagates to the other devices within one
+   anti-entropy round (a few seconds).
 
 If two devices should stay on separate tailnets/LANs with no discovery
 path between them, use `--bootstrap host:port` to point one at the other's

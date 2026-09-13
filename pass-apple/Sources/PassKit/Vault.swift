@@ -199,6 +199,31 @@ public final class Vault: @unchecked Sendable {
         )
     }
 
+    /// Whether `pass-syncd` already knows of an existing synced vault on
+    /// this network (some other device set one up first) — no vault needs
+    /// to be open yet to check, since this is meant to be called right
+    /// after showing the create-vault screen, to decide whether to offer
+    /// `importFromSync()` at all.
+    public static func checkSyncImportAvailable() -> Bool {
+        vault_check_sync_import_available()
+    }
+
+    /// For a brand-new vault (right after `Vault.create`, before anything
+    /// has been added to it): if some other device already set this same
+    /// vault up for sync, adopts its exact salt and immediately pulls in
+    /// every entry the mesh currently has, and returns how many entries
+    /// were imported (`0` if there was nothing to import — daemon
+    /// unreachable, or reachable but genuinely empty; not an error).
+    @discardableResult
+    public func importFromSync() throws -> Int {
+        var imported: UInt = 0
+        let result = withUnsafeMutablePointer(to: &imported) { importedPtr in
+            vault_import_from_sync(handle, importedPtr)
+        }
+        try check(result)
+        return Int(imported)
+    }
+
     /// Pulls and applies any changes the local `pass-syncd` daemon has for
     /// this vault (persisting them if there were any), and returns how many
     /// local entries changed as a result. Every other mutating method above

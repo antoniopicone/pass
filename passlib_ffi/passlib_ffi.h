@@ -96,6 +96,16 @@ PassResult vault_merge_from_file(CVault *vault, const char *other_path,
 // how many local entries changed as a result, 0 if none did.
 PassResult vault_sync_pull(CVault *vault, size_t *applied_out);
 
+// Joining an existing synced vault from a brand-new device: call right
+// after vault_init, before adding anything. vault_check_sync_import_available
+// needs no CVault yet (call it to decide whether to show an "import from
+// another device?" option on the create-vault screen at all).
+// vault_import_from_sync then adopts the discovered sync salt and pulls in
+// every entry the mesh currently has; imported_out (may be NULL) is set to
+// how many entries were imported, 0 if there was nothing to import.
+bool vault_check_sync_import_available(void);
+PassResult vault_import_from_sync(CVault *vault, size_t *imported_out);
+
 // The Display message of the most recent error on this thread, or NULL if
 // none has occurred yet (e.g. why a call returned PassResultErrorUnknown).
 // Caller must free the result with string_free.
