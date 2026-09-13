@@ -1,5 +1,5 @@
 use libc::{c_char, size_t};
-use passlib::{PassError, PasswordEntry, Vault};
+use passlib::{PassError, PasswordEntry, SyncHandle, Vault};
 use std::cell::RefCell;
 use std::ffi::{CStr, CString};
 use std::path::PathBuf;
@@ -103,6 +103,23 @@ fn split_additional_urls(raw: &str) -> Vec<String> {
 // Helper function to convert Rust string to C string
 fn to_c_string(s: &str) -> *mut c_char {
     CString::new(s).unwrap().into_raw()
+}
+
+/// Pushes entry `id`'s current state to `pass-syncd`. `salt` must come from
+/// [`Vault::ensure_sync_salt`] called *before* the mutation was saved (see
+/// every call site below) so a freshly generated salt is already on disk,
+/// not stranded in memory for this process only. Best-effort — never
+/// affects the `PassResult` this FFI call returns, exactly like every other
+/// client in this repo's own sync wiring.
+fn sync_push_upsert(vault_ref: &Vault, master_password: &str, salt: [u8; 16], id: &str) {
+    if let Ok(entry) = vault_ref.get_entry(id) {
+        SyncHandle::new(vault_ref.path(), salt, master_password).push_upsert(&entry);
+    }
+}
+
+/// Pushes entry `id`'s deletion to `pass-syncd`. See [`sync_push_upsert`].
+fn sync_push_delete(vault_ref: &Vault, master_password: &str, salt: [u8; 16], id: &str) {
+    SyncHandle::new(vault_ref.path(), salt, master_password).push_delete(id);
 }
 
 // Helper function to convert C string to Rust string
@@ -250,10 +267,12 @@ pub unsafe extern "C" fn vault_add_entry(
 
     match vault_ref.add_entry(entry) {
         Ok(_) => {
+            let salt = vault_ref.ensure_sync_salt();
             if let Err(e) = vault_ref.save(&cvault.master_password) {
                 set_last_error(&e);
                 return PassResult::ErrorUnknown;
             }
+            sync_push_upsert(vault_ref, &cvault.master_password, salt, &id);
             if !id_out.is_null() {
                 *id_out = to_c_string(&id);
             }
@@ -522,10 +541,12 @@ pub unsafe extern "C" fn vault_update_entry(
         additional_urls_opt,
     ) {
         Ok(_) => {
+            let salt = vault_ref.ensure_sync_salt();
             if let Err(e) = vault_ref.save(&cvault.master_password) {
                 set_last_error(&e);
                 return PassResult::ErrorUnknown;
             }
+            sync_push_upsert(vault_ref, &cvault.master_password, salt, &id_str);
             PassResult::Success
         }
         Err(passlib::PassError::EntryNotFound(_)) => PassResult::ErrorEntryNotFound,
@@ -563,10 +584,12 @@ pub unsafe extern "C" fn vault_delete_entry(
 
     match vault_ref.delete_entry(&id_str) {
         Ok(_) => {
+            let salt = vault_ref.ensure_sync_salt();
             if let Err(e) = vault_ref.save(&cvault.master_password) {
                 set_last_error(&e);
                 return PassResult::ErrorUnknown;
             }
+            sync_push_delete(vault_ref, &cvault.master_password, salt, &id_str);
             PassResult::Success
         }
         Err(passlib::PassError::EntryNotFound(_)) => PassResult::ErrorEntryNotFound,
@@ -617,10 +640,12 @@ pub unsafe extern "C" fn vault_set_entry_totp_uri(
 
     match vault_ref.set_entry_totp(&id_str, totp) {
         Ok(_) => {
+            let salt = vault_ref.ensure_sync_salt();
             if let Err(e) = vault_ref.save(&cvault.master_password) {
                 set_last_error(&e);
                 return PassResult::ErrorUnknown;
             }
+            sync_push_upsert(vault_ref, &cvault.master_password, salt, &id_str);
             PassResult::Success
         }
         Err(passlib::PassError::EntryNotFound(_)) => PassResult::ErrorEntryNotFound,
@@ -655,10 +680,12 @@ pub unsafe extern "C" fn vault_clear_entry_totp(vault: *mut CVault, id: *const c
 
     match vault_ref.clear_entry_totp(&id_str) {
         Ok(_) => {
+            let salt = vault_ref.ensure_sync_salt();
             if let Err(e) = vault_ref.save(&cvault.master_password) {
                 set_last_error(&e);
                 return PassResult::ErrorUnknown;
             }
+            sync_push_upsert(vault_ref, &cvault.master_password, salt, &id_str);
             PassResult::Success
         }
         Err(passlib::PassError::EntryNotFound(_)) => PassResult::ErrorEntryNotFound,
@@ -703,9 +730,20 @@ pub unsafe extern "C" fn vault_merge_from_file(
 
     match vault_ref.merge_from_file(&other_path_str, &cvault.master_password) {
         Ok(summary) => {
+            let salt = vault_ref.ensure_sync_salt();
             if let Err(e) = vault_ref.save(&cvault.master_password) {
                 set_last_error(&e);
                 return PassResult::ErrorUnknown;
+            }
+            // A merge can touch many entries at once with no single id to
+            // push (see pass-native-host's mergeFromFile handler for the
+            // same reasoning) — push every entry instead.
+            if summary.changed() {
+                if let Ok(entries) = vault_ref.list_entries() {
+                    for e in entries {
+                        sync_push_upsert(vault_ref, &cvault.master_password, salt, &e.id);
+                    }
+                }
             }
             if !created_out.is_null() {
                 *created_out = summary.created;
@@ -728,6 +766,50 @@ pub unsafe extern "C" fn vault_merge_from_file(
             PassResult::ErrorUnknown
         }
     }
+}
+
+/// Pulls and applies any changes `pass-syncd` has for this vault, saving if
+/// anything actually changed. `applied_out` (if non-NULL) receives how many
+/// local entries were added/updated/deleted as a result — the Swift layer
+/// can use `applied_out > 0` to decide whether to refresh its own entry
+/// list. Never fails the call just because the daemon isn't reachable or
+/// this vault hasn't had sync set up yet (`PassResult::Success` either
+/// way, `*applied_out == 0`) — see [`passlib::sync::SyncHandle`]'s own
+/// doc comment for the full best-effort contract this mirrors.
+///
+/// # Safety
+/// - vault must be a valid CVault pointer
+/// - applied_out, if non-NULL, must be a valid `size_t` pointer
+#[no_mangle]
+pub unsafe extern "C" fn vault_sync_pull(vault: *mut CVault, applied_out: *mut size_t) -> PassResult {
+    if vault.is_null() {
+        return PassResult::ErrorInvalidInput;
+    }
+
+    let cvault = &mut *vault;
+    let vault_ref = match cvault.vault.as_mut() {
+        Some(v) => v,
+        None => return PassResult::ErrorUnknown,
+    };
+
+    let applied = match SyncHandle::for_vault(vault_ref, &cvault.master_password) {
+        Some(handle) => {
+            let n = handle.pull_and_apply(vault_ref);
+            if n > 0 {
+                if let Err(e) = vault_ref.save(&cvault.master_password) {
+                    set_last_error(&e);
+                    return PassResult::ErrorUnknown;
+                }
+            }
+            n
+        }
+        None => 0,
+    };
+
+    if !applied_out.is_null() {
+        *applied_out = applied;
+    }
+    PassResult::Success
 }
 
 /// Free a vault instance

@@ -34,6 +34,12 @@ final class AppState: ObservableObject {
 
     private var vault: Vault?
 
+    /// Polls the local `pass-syncd` daemon for other devices' changes while
+    /// the vault is unlocked (every mutating method on `Vault` already
+    /// pushes its own change automatically — see `Vault.syncPull`'s doc
+    /// comment). Started on unlock/create, stopped on lock.
+    private var syncTimer: Timer?
+
     var isUnlocked: Bool { vault != nil }
 
     static func defaultVaultPath() -> String {
@@ -56,6 +62,7 @@ final class AppState: ObservableObject {
             errorMessage = nil
             try reload()
             offerBiometricEnrollmentIfNeeded(password: password)
+            startSyncTimer()
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -72,6 +79,7 @@ final class AppState: ObservableObject {
             errorMessage = nil
             try reload()
             offerBiometricEnrollmentIfNeeded(password: password)
+            startSyncTimer()
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -83,9 +91,38 @@ final class AppState: ObservableObject {
     }
 
     func lock() {
+        stopSyncTimer()
         vault = nil
         entries = []
         statusMessage = nil
+    }
+
+    // MARK: - Real-time sync (pass-syncd)
+
+    private func startSyncTimer() {
+        syncTimer?.invalidate()
+        syncTimer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                self?.pullSyncChanges()
+            }
+        }
+    }
+
+    private func stopSyncTimer() {
+        syncTimer?.invalidate()
+        syncTimer = nil
+    }
+
+    /// Pulls any changes `pass-syncd` has for this vault and refreshes
+    /// `entries` if anything changed. Best-effort: failures (daemon not
+    /// running, sync not set up on this vault yet, ...) are swallowed
+    /// rather than surfaced as `errorMessage` — see `Vault.syncPull`'s doc
+    /// comment for the full contract.
+    private func pullSyncChanges() {
+        guard let vault else { return }
+        if let applied = try? vault.syncPull(), applied > 0 {
+            try? reload()
+        }
     }
 
     // MARK: - Entries

@@ -114,7 +114,7 @@
     "message": "Unisci copia del vault"
   },
   "merge_hint": {
-    "message": "Indica una copia sincronizzata del vault (es. dentro una cartella Nextcloud) per importare le modifiche fatte su un altro dispositivo."
+    "message": "Importazione una tantum da un file KDBX non correlato. Per tenere sincronizzato questo vault tra i tuoi dispositivi, installa invece pass-syncd (vedi la sezione \"Cross-device sync\" del README principale) — una volta configurato avviene automaticamente."
   },
   "merge_field_path": {
     "message": "Percorso dell'altro vault"

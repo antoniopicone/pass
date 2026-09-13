@@ -7,11 +7,12 @@ use libadwaita as adw;
 
 use adw::prelude::*;
 use gtk::{gio, glib};
-use passlib::Vault;
+use passlib::{SyncHandle, Vault};
 use state::{AppState, Unlocked};
 use std::cell::RefCell;
 use std::path::PathBuf;
 use std::rc::Rc;
+use std::time::Duration;
 
 const APP_ID: &str = "it.antoniopicone.Pass";
 
@@ -262,9 +263,25 @@ fn build_ui(app: &adw::Application) {
 
                 match unlocked.vault.merge_from_file(&other_path, &unlocked.master_password) {
                     Ok(summary) => {
+                        let salt = unlocked.vault.ensure_sync_salt();
                         if let Err(e) = unlocked.vault.save(&unlocked.master_password) {
                             ui.toasts.add_toast(adw::Toast::new(&format!("Failed to save merged vault: {e}")));
                             return;
+                        }
+                        // A merge can touch many entries at once with no
+                        // single id to push (see pass-native-host's
+                        // mergeFromFile handler for the same reasoning) —
+                        // push every entry so other devices don't have to
+                        // wait for each one's next individual edit.
+                        if summary.changed() {
+                            if let Ok(entries) = unlocked.vault.list_entries() {
+                                let handle = SyncHandle::new(unlocked.vault.path(), salt, &unlocked.master_password);
+                                for e in entries {
+                                    if let Ok(entry) = unlocked.vault.get_entry(&e.id) {
+                                        handle.push_upsert(&entry);
+                                    }
+                                }
+                            }
                         }
                         drop(s);
                         ui.toasts.add_toast(adw::Toast::new(&format!(
@@ -297,6 +314,41 @@ fn build_ui(app: &adw::Application) {
         let ui = ui.clone();
         search_entry.connect_search_changed(move |_| {
             refresh_list(&state, &ui);
+        });
+    }
+
+    // Periodic real-time sync pull while the vault is unlocked, reusing the
+    // same `glib::timeout_add_local` pattern as the TOTP countdown in
+    // dialogs.rs. Registered once, unconditionally, rather than started/
+    // stopped per unlock/lock cycle: it simply no-ops while locked, which
+    // is simpler than tracking a cancellable `SourceId` across every
+    // unlock/create/lock transition. Runs the pull (a loopback HTTP call,
+    // bounded by passlib::sync's own short request timeout) directly on
+    // the GTK main thread rather than a worker thread: `Vault`/`AppState`
+    // aren't `Send`, so offloading it would require splitting
+    // `SyncHandle::pull_and_apply`'s fetch-then-decrypt-then-apply into
+    // separate network and vault-mutation steps — not worth it for a call
+    // that resolves near-instantly on the common path (daemon reachable,
+    // unchanged fingerprint).
+    {
+        let state = state.clone();
+        let ui = ui.clone();
+        glib::timeout_add_local(Duration::from_secs(3), move || {
+            let mut s = state.borrow_mut();
+            if let Some(unlocked) = s.unlocked.as_mut() {
+                if let Some(handle) = SyncHandle::for_vault(&unlocked.vault, &unlocked.master_password) {
+                    let changed = handle.pull_and_apply(&mut unlocked.vault);
+                    if changed > 0 && unlocked.vault.save(&unlocked.master_password).is_ok() {
+                        drop(s);
+                        refresh_list(&state, &ui);
+                        ui.toasts.add_toast(adw::Toast::new(&format!(
+                            "Synced {changed} change(s) from another device"
+                        )));
+                        return glib::ControlFlow::Continue;
+                    }
+                }
+            }
+            glib::ControlFlow::Continue
         });
     }
 

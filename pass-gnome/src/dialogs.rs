@@ -109,16 +109,29 @@ pub fn show_edit_dialog(
             let result = match &existing_id {
                 Some(id) => unlocked
                     .vault
-                    .update_entry(id, Some(website), Some(url), Some(username), Some(password))
-                    .map(|_| ()),
+                    .update_entry(id, Some(website), Some(url), Some(username), Some(password), None, None)
+                    .map(|_| id.clone()),
                 None => {
                     let entry = passlib::PasswordEntry::new(website, url, username, password);
-                    unlocked.vault.add_entry(entry).map(|_| ())
+                    unlocked.vault.add_entry(entry)
                 }
             };
 
-            match result.and_then(|_| unlocked.vault.save(&unlocked.master_password)) {
+            let saved_id = match result {
+                Ok(id) => id,
+                Err(e) => {
+                    status.set_text(&format!("{e}"));
+                    return;
+                }
+            };
+
+            let salt = unlocked.vault.ensure_sync_salt();
+            match unlocked.vault.save(&unlocked.master_password) {
                 Ok(_) => {
+                    if let Ok(entry) = unlocked.vault.get_entry(&saved_id) {
+                        passlib::SyncHandle::new(unlocked.vault.path(), salt, &unlocked.master_password)
+                            .push_upsert(&entry);
+                    }
                     drop(s);
                     dialog.close();
                     refresh_list(&state, &ui);
@@ -275,12 +288,17 @@ pub fn show_detail_dialog(state: Rc<RefCell<AppState>>, ui: Ui, parent: gtk::Win
             remove_totp_row.connect_activated(move |_| {
                 let mut s = state.borrow_mut();
                 let Some(unlocked) = s.unlocked.as_mut() else { return };
-                let result = unlocked
-                    .vault
-                    .clear_entry_totp(&entry_id)
-                    .and_then(|_| unlocked.vault.save(&unlocked.master_password));
-                match result {
+                if let Err(e) = unlocked.vault.clear_entry_totp(&entry_id) {
+                    ui.toasts.add_toast(adw::Toast::new(&format!("Failed to remove MFA code: {e}")));
+                    return;
+                }
+                let salt = unlocked.vault.ensure_sync_salt();
+                match unlocked.vault.save(&unlocked.master_password) {
                     Ok(_) => {
+                        if let Ok(entry) = unlocked.vault.get_entry(&entry_id) {
+                            passlib::SyncHandle::new(unlocked.vault.path(), salt, &unlocked.master_password)
+                                .push_upsert(&entry);
+                        }
                         drop(s);
                         dialog.close();
                         refresh_list(&state, &ui);
@@ -366,12 +384,15 @@ pub fn show_detail_dialog(state: Rc<RefCell<AppState>>, ui: Ui, parent: gtk::Win
                 }
                 let mut s = state.borrow_mut();
                 let Some(unlocked) = s.unlocked.as_mut() else { return };
-                let result = unlocked
-                    .vault
-                    .delete_entry(&entry_id)
-                    .and_then(|_| unlocked.vault.save(&unlocked.master_password));
-                match result {
+                if let Err(e) = unlocked.vault.delete_entry(&entry_id) {
+                    ui.toasts.add_toast(adw::Toast::new(&format!("Failed to delete: {e}")));
+                    return;
+                }
+                let salt = unlocked.vault.ensure_sync_salt();
+                match unlocked.vault.save(&unlocked.master_password) {
                     Ok(_) => {
+                        passlib::SyncHandle::new(unlocked.vault.path(), salt, &unlocked.master_password)
+                            .push_delete(&entry_id);
                         drop(s);
                         dialog.close();
                         refresh_list(&state, &ui);
@@ -460,13 +481,17 @@ fn show_totp_attach_dialog(state: Rc<RefCell<AppState>>, ui: Ui, parent: gtk::Wi
 
             let mut s = state.borrow_mut();
             let Some(unlocked) = s.unlocked.as_mut() else { return };
-            let result = unlocked
-                .vault
-                .set_entry_totp(&entry_id, totp)
-                .and_then(|_| unlocked.vault.save(&unlocked.master_password));
-
-            match result {
+            if let Err(e) = unlocked.vault.set_entry_totp(&entry_id, totp) {
+                status.set_text(&format!("{e}"));
+                return;
+            }
+            let salt = unlocked.vault.ensure_sync_salt();
+            match unlocked.vault.save(&unlocked.master_password) {
                 Ok(_) => {
+                    if let Ok(entry) = unlocked.vault.get_entry(&entry_id) {
+                        passlib::SyncHandle::new(unlocked.vault.path(), salt, &unlocked.master_password)
+                            .push_upsert(&entry);
+                    }
                     drop(s);
                     dialog.close();
                     // The entry detail dialog underneath is stale now;

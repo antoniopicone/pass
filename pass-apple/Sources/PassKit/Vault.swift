@@ -198,4 +198,25 @@ public final class Vault: @unchecked Sendable {
             deleted: Int(deleted)
         )
     }
+
+    /// Pulls and applies any changes the local `pass-syncd` daemon has for
+    /// this vault (persisting them if there were any), and returns how many
+    /// local entries changed as a result. Every other mutating method above
+    /// already pushes its own change to `pass-syncd` automatically — this
+    /// is the only call needed to bring *other* devices' changes in, e.g.
+    /// from a periodic timer while the vault is unlocked (see `AppState`).
+    ///
+    /// Always succeeds from the caller's point of view whether or not
+    /// `pass-syncd` is installed/reachable or this vault has sync set up
+    /// yet — see `passlib::sync::SyncHandle`'s own doc comment for the
+    /// full best-effort contract this mirrors.
+    @discardableResult
+    public func syncPull() throws -> Int {
+        var applied: UInt = 0
+        let result = withUnsafeMutablePointer(to: &applied) { appliedPtr in
+            vault_sync_pull(handle, appliedPtr)
+        }
+        try check(result)
+        return Int(applied)
+    }
 }

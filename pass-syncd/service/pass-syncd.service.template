@@ -1,0 +1,13 @@
+[Unit]
+Description=pass-syncd — real-time sync daemon for the Pass password manager
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=__BINARY_PATH__ serve
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=default.target

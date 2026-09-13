@@ -85,6 +85,17 @@ PassResult vault_merge_from_file(CVault *vault, const char *other_path,
                                  size_t *created_out, size_t *updated_out,
                                  size_t *unchanged_out, size_t *deleted_out);
 
+// Real-time cross-device sync via the local pass-syncd daemon (see
+// pass-syncd/README.md and passlib/src/sync.rs). Every vault_add_entry /
+// vault_update_entry / vault_delete_entry / vault_set_entry_totp_uri /
+// vault_clear_entry_totp / vault_merge_from_file call above already pushes
+// its own change automatically — this is the only call needed to pull
+// other devices' changes in. Always returns PassResultSuccess unless the
+// vault itself is invalid, whether or not pass-syncd is actually reachable
+// or this vault has sync set up yet; applied_out (may be NULL) is set to
+// how many local entries changed as a result, 0 if none did.
+PassResult vault_sync_pull(CVault *vault, size_t *applied_out);
+
 // The Display message of the most recent error on this thread, or NULL if
 // none has occurred yet (e.g. why a call returned PassResultErrorUnknown).
 // Caller must free the result with string_free.

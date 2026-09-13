@@ -9,6 +9,7 @@ license.workspace = true
 keepass = { version = "0.13.20", features = ["save_kdbx4", "totp", "_merge"] }
 zeroize.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 chrono.workspace = true
 uuid.workspace = true
 thiserror.workspace = true
@@ -16,6 +17,11 @@ hmac = "0.13.0"
 sha1 = "0.11.0"
 sha2 = "0.11.0"
 base32 = "0.5.1"
+# Cross-device sync (see src/sync.rs)
+argon2.workspace = true
+aes-gcm.workspace = true
+base64 = "0.22"
+reqwest = { version = "0.12", default-features = false, features = ["json", "blocking", "rustls-tls"] }
 
 [dev-dependencies]
 tempfile = "3.8"

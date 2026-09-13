@@ -2,10 +2,13 @@
 
 A shared SwiftUI app (unlock/create vault, search, view/reveal/copy
 password and MFA code with a live countdown, add/edit/delete, attach MFA
-via `otpauth://` URI or a QR code photo, merge another vault copy) backed
+via `otpauth://` URI or a QR code photo, import another vault file) backed
 by `passlib_ffi` — the same Rust core `pass`, `pass-gnome`, and the
 Chromium extension use, opening the same real KDBX4/KeePassXC-compatible
-`.kdbx` files.
+`.kdbx` files. Every mutation pushes to the local
+[`pass-syncd`](../pass-syncd/) daemon automatically, and a background timer
+pulls other devices' changes in every few seconds while unlocked — see the
+top-level README's "Cross-device sync" section.
 
 ## ⚠️ Verification status — please read before opening this in Xcode
 
@@ -99,8 +102,15 @@ pass-apple/
   "KDBX4 / KeePassXC compatibility" section for the field mapping.
 - **No custom merge logic here either.** `Vault.merge(fromFile:)` calls
   straight into `vault_merge_from_file`, which is backed by
-  `keepass::Database::merge` — the same cross-device reconciliation `pass
-  merge`/`pass watch` use.
+  `keepass::Database::merge` — a one-off import tool for an *unrelated*
+  KDBX file, unrelated to cross-device sync of this same vault (see next).
+- **No custom sync logic here either, again.** `Vault.syncPull()` is a thin
+  wrapper over `vault_sync_pull`, backed by `passlib::sync::SyncHandle` —
+  the exact same encrypted push/pull client every other `pass` frontend
+  uses against the local `pass-syncd` daemon. `AppState`'s `startSyncTimer`
+  polls it every 3s while unlocked; every mutating `Vault` method already
+  pushes its own change automatically (baked into `passlib_ffi` itself), so
+  nothing on the Swift side needed to change for that half.
 - **iOS file picking copies into the app's own Documents directory**
   (`AppState.importVaultFile`) rather than holding onto a security-scoped
   URL across the whole session, since the vault stays "open" across many

@@ -38,11 +38,13 @@
 
 pub mod entry;
 pub mod error;
+pub mod sync;
 pub mod totp;
 pub mod vault;
 
 // Re-export main types
 pub use entry::{PasswordEntry, PasswordEntrySummary};
 pub use error::{PassError, Result};
+pub use sync::SyncHandle;
 pub use totp::{TotpAlgorithm, TotpConfig};
 pub use vault::{MergeSummary, Vault};

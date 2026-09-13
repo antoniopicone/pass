@@ -20,7 +20,10 @@ use crate::error::{PassError, Result};
 use crate::totp::{self, TotpConfig};
 use chrono::{DateTime, NaiveDateTime, Utc};
 use keepass::config::KdfConfig;
-use keepass::db::{fields, merge::MergeLog, DatabaseOpenError, EntryId, EntryRef, GroupId, Times};
+use keepass::db::{
+    fields, merge::MergeLog, CustomDataItem, CustomDataValue, DatabaseOpenError, EntryId, EntryRef,
+    GroupId, Times,
+};
 use keepass::error::DatabaseKeyError;
 use keepass::{Database, DatabaseKey};
 use std::fs::{self, File};
@@ -35,6 +38,24 @@ const RECYCLE_BIN_GROUP_NAME: &str = "Recycle Bin";
 /// attribute, so it shows up (and is editable) as one in KeePassXC/any
 /// other KDBX tool, they just won't know to match against it themselves.
 const ADDITIONAL_URLS_FIELD: &str = "Pass_AdditionalURLs";
+
+/// Database-wide (not per-entry) custom data key holding this vault's sync
+/// salt: a random value, generated once and stored in the vault itself, so
+/// every device that unlocks a copy of this same KDBX file derives the same
+/// [`crate::sync`] encryption key from the shared master password without
+/// needing any separate secret distributed out of band. Stored as
+/// [`CustomDataValue::Binary`] rather than `::String` deliberately: the
+/// `keepass` crate's own XML layer guesses a custom-data item's type back
+/// from its on-disk form by trying to base64-decode it, so a `String` value
+/// that happens to *look* like valid base64 (plausible for e.g. a hex- or
+/// base64-encoded salt) silently comes back as `::Binary` with garbage
+/// bytes after a save/reopen round-trip — verified by hand against this
+/// crate (0.13.20) before settling on `::Binary`, which sidesteps the
+/// ambiguity entirely by always being on the side that guess resolves to.
+/// Visible (as opaque base64) in KeePassXC's own database-settings custom
+/// data view, same spirit as [`ADDITIONAL_URLS_FIELD`].
+const SYNC_SALT_KEY: &str = "Pass_SyncSalt";
+const SYNC_SALT_LEN: usize = 16;
 
 fn encode_additional_urls(urls: &[String]) -> String {
     urls.join("\n")
@@ -306,6 +327,42 @@ impl Vault {
     /// Check if the vault is empty
     pub fn is_empty(&self) -> bool {
         self.len() == 0
+    }
+
+    /// This vault's sync salt (see [`SYNC_SALT_KEY`]), if one has already
+    /// been generated — `None` for a vault that predates the sync feature
+    /// and hasn't gone through [`Vault::ensure_sync_salt`] yet. A read-only
+    /// accessor, deliberately not creating one: callers on a read-only path
+    /// (listing/getting entries) shouldn't force a vault mutation (and thus
+    /// a save) just to check whether sync is set up.
+    pub fn sync_salt(&self) -> Option<[u8; SYNC_SALT_LEN]> {
+        let item = self.db.meta.custom_data.get(SYNC_SALT_KEY)?;
+        let CustomDataValue::Binary(bytes) = item.value.as_ref()? else {
+            return None;
+        };
+        bytes.clone().try_into().ok()
+    }
+
+    /// Returns this vault's sync salt, generating and storing one (as
+    /// database-wide custom data — see [`SYNC_SALT_KEY`]) if this is the
+    /// first time it's needed. Callers on a mutating path (add/update/
+    /// delete) can call this freely since they already call [`Vault::save`]
+    /// afterward, which is what actually persists a freshly generated salt.
+    pub fn ensure_sync_salt(&mut self) -> [u8; SYNC_SALT_LEN] {
+        if let Some(existing) = self.sync_salt() {
+            return existing;
+        }
+        let mut salt = [0u8; SYNC_SALT_LEN];
+        use aes_gcm::aead::rand_core::{OsRng, RngCore};
+        OsRng.fill_bytes(&mut salt);
+        self.db.meta.custom_data.insert(
+            SYNC_SALT_KEY.to_string(),
+            CustomDataItem {
+                value: Some(CustomDataValue::Binary(salt.to_vec())),
+                last_modification_time: Some(Times::now()),
+            },
+        );
+        salt
     }
 
     fn recycle_bin_id(&self) -> Option<GroupId> {

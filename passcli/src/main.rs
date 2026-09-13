@@ -2,11 +2,8 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use colored::*;
 use dialoguer::{Confirm, Input, Password};
-use notify::{Event, RecursiveMode, Watcher};
-use passlib::{PasswordEntry, Vault};
+use passlib::{PasswordEntry, SyncHandle, Vault};
 use std::path::{Path, PathBuf};
-use std::sync::mpsc;
-use std::time::Duration;
 
 const DEFAULT_VAULT_PATH: &str = "passwords.kdbx";
 
@@ -54,9 +51,13 @@ enum Commands {
         id: String,
     },
 
-    /// Merge another copy of this vault (e.g. synced via Nextcloud) into it
+    /// One-off import: merge entries from an unrelated KDBX file into this
+    /// vault (e.g. a database you got from someone else, or an old backup).
+    /// For keeping copies of *this same* vault in sync across your own
+    /// devices, use `pass-syncd` instead — see `pass sync status` and the
+    /// top-level README's "Cross-device sync" section.
     Merge {
-        /// Path to the other vault file to merge from
+        /// Path to the other KDBX file to merge from
         other: PathBuf,
     },
 
@@ -66,22 +67,8 @@ enum Commands {
         action: TotpAction,
     },
 
-    /// Watch another vault copy (e.g. synced via Nextcloud) and automatically
-    /// merge changes into this vault as they appear
-    Watch {
-        /// Path to the other vault file to watch and merge from
-        other: PathBuf,
-
-        /// Also copy the merged vault to this path after each merge, e.g. to
-        /// publish it back to a shared/synced location for other devices
-        #[arg(long)]
-        publish: Option<PathBuf>,
-
-        /// Quiet period (ms) after a change is detected before merging, to
-        /// coalesce the burst of filesystem events a single save produces
-        #[arg(long, default_value_t = 500)]
-        debounce_ms: u64,
-    },
+    /// Show this vault's real-time sync status (pass-syncd)
+    Sync,
 
     /// Interactive mode - menu-driven interface for managing passwords
     Interactive,
@@ -130,11 +117,7 @@ fn main() -> Result<()> {
         Commands::Update { id } => cmd_update(&cli.vault, &id),
         Commands::Merge { other } => cmd_merge(&cli.vault, &other),
         Commands::Totp { action } => cmd_totp(&cli.vault, action),
-        Commands::Watch {
-            other,
-            publish,
-            debounce_ms,
-        } => cmd_watch(&cli.vault, &other, &publish, debounce_ms),
+        Commands::Sync => cmd_sync_status(&cli.vault),
         Commands::Interactive => cmd_interactive(&cli.vault),
     }
 }
@@ -209,9 +192,11 @@ fn cmd_add(vault_path: &PathBuf) -> Result<()> {
     let entry = PasswordEntry::new(website.clone(), url, username, password);
     let id = vault.add_entry(entry)
         .context("Failed to add entry")?;
-    
+
+    let salt = vault.ensure_sync_salt();
     vault.save(&master_password)
         .context("Failed to save vault")?;
+    sync_push_upsert(&vault, &master_password, salt, &id);
 
     println!();
     println!("{}", "✅ Password entry added successfully!".green().bold());
@@ -225,8 +210,9 @@ fn cmd_add(vault_path: &PathBuf) -> Result<()> {
 /// List all password entries
 fn cmd_list(vault_path: &PathBuf) -> Result<()> {
     let master_password = prompt_master_password()?;
-    let vault = Vault::unlock(vault_path, &master_password)
+    let mut vault = Vault::unlock(vault_path, &master_password)
         .context("Failed to unlock vault (wrong password?)")?;
+    sync_pull(&mut vault, &master_password)?;
 
     let entries = vault.list_entries()
         .context("Failed to list entries")?;
@@ -295,8 +281,9 @@ fn print_totp_line(entry: &PasswordEntry) {
 /// Get a specific password entry
 fn cmd_get(vault_path: &PathBuf, query: &str) -> Result<()> {
     let master_password = prompt_master_password()?;
-    let vault = Vault::unlock(vault_path, &master_password)
+    let mut vault = Vault::unlock(vault_path, &master_password)
         .context("Failed to unlock vault (wrong password?)")?;
+    sync_pull(&mut vault, &master_password)?;
 
     let entry = find_entry(&vault, query)?;
 
@@ -325,6 +312,7 @@ fn cmd_delete(vault_path: &PathBuf, id: &str) -> Result<()> {
     let master_password = prompt_master_password()?;
     let mut vault = Vault::unlock(vault_path, &master_password)
         .context("Failed to unlock vault (wrong password?)")?;
+    sync_pull(&mut vault, &master_password)?;
 
     // Show the entry before deleting
     let entry = vault.get_entry(id)
@@ -349,9 +337,11 @@ fn cmd_delete(vault_path: &PathBuf, id: &str) -> Result<()> {
 
     vault.delete_entry(id)
         .context("Failed to delete entry")?;
-    
+
+    let salt = vault.ensure_sync_salt();
     vault.save(&master_password)
         .context("Failed to save vault")?;
+    sync_push_delete(&vault, &master_password, salt, id);
 
     println!();
     println!("{}", "✅ Password entry deleted successfully!".green().bold());
@@ -365,6 +355,7 @@ fn cmd_update(vault_path: &PathBuf, id: &str) -> Result<()> {
     let master_password = prompt_master_password()?;
     let mut vault = Vault::unlock(vault_path, &master_password)
         .context("Failed to unlock vault (wrong password?)")?;
+    sync_pull(&mut vault, &master_password)?;
 
     // Show current values
     let entry = vault.get_entry(id)
@@ -421,8 +412,10 @@ fn cmd_update(vault_path: &PathBuf, id: &str) -> Result<()> {
         None,
     ).context("Failed to update entry")?;
 
+    let salt = vault.ensure_sync_salt();
     vault.save(&master_password)
         .context("Failed to save vault")?;
+    sync_push_upsert(&vault, &master_password, salt, id);
 
     println!();
     println!("{}", "✅ Password entry updated successfully!".green().bold());
@@ -515,6 +508,7 @@ fn cmd_totp_add(vault_path: &PathBuf, id: &str, qr: &Option<PathBuf>, uri: &Opti
     let master_password = prompt_master_password()?;
     let mut vault = Vault::unlock(vault_path, &master_password)
         .context("Failed to unlock vault (wrong password?)")?;
+    sync_pull(&mut vault, &master_password)?;
 
     let website = vault
         .get_entry(id)
@@ -524,8 +518,10 @@ fn cmd_totp_add(vault_path: &PathBuf, id: &str, qr: &Option<PathBuf>, uri: &Opti
 
     vault.set_entry_totp(id, totp.clone())
         .context("Failed to attach MFA secret")?;
+    let salt = vault.ensure_sync_salt();
     vault.save(&master_password)
         .context("Failed to save vault")?;
+    sync_push_upsert(&vault, &master_password, salt, id);
 
     println!();
     println!("{}", format!("✅ MFA code added to '{}'.", website).green().bold());
@@ -541,8 +537,9 @@ fn cmd_totp_add(vault_path: &PathBuf, id: &str, qr: &Option<PathBuf>, uri: &Opti
 /// Show the current MFA code for an entry
 fn cmd_totp_show(vault_path: &PathBuf, query: &str) -> Result<()> {
     let master_password = prompt_master_password()?;
-    let vault = Vault::unlock(vault_path, &master_password)
+    let mut vault = Vault::unlock(vault_path, &master_password)
         .context("Failed to unlock vault (wrong password?)")?;
+    sync_pull(&mut vault, &master_password)?;
 
     let entry = find_entry(&vault, query)?;
     let totp = entry
@@ -571,6 +568,7 @@ fn cmd_totp_remove(vault_path: &PathBuf, id: &str) -> Result<()> {
     let master_password = prompt_master_password()?;
     let mut vault = Vault::unlock(vault_path, &master_password)
         .context("Failed to unlock vault (wrong password?)")?;
+    sync_pull(&mut vault, &master_password)?;
 
     let website = vault
         .get_entry(id)
@@ -580,8 +578,10 @@ fn cmd_totp_remove(vault_path: &PathBuf, id: &str) -> Result<()> {
 
     vault.clear_entry_totp(id)
         .context("Failed to remove MFA secret")?;
+    let salt = vault.ensure_sync_salt();
     vault.save(&master_password)
         .context("Failed to save vault")?;
+    sync_push_upsert(&vault, &master_password, salt, id);
 
     println!();
     println!("{}", format!("✅ MFA code removed from '{}'.", website).green().bold());
@@ -590,158 +590,75 @@ fn cmd_totp_remove(vault_path: &PathBuf, id: &str) -> Result<()> {
     Ok(())
 }
 
-/// Watch another vault copy and automatically merge changes into this one
-/// as they appear on disk (e.g. because a Nextcloud client just synced them
-/// down from another device).
-fn cmd_watch(
-    vault_path: &PathBuf,
-    other_path: &PathBuf,
-    publish: &Option<PathBuf>,
-    debounce_ms: u64,
-) -> Result<()> {
-    println!("{}", "👀 Watch & Auto-Merge".bold().cyan());
+/// Show this vault's real-time sync status: whether `pass-syncd` is
+/// reachable and, if so, how many entries it currently holds for this
+/// vault. See `pass-syncd/README.md` for installing/pairing the daemon —
+/// every add/update/delete already pushes to it automatically when it's
+/// running, so there's nothing else to configure here.
+fn cmd_sync_status(vault_path: &PathBuf) -> Result<()> {
+    println!("{}", "🔄 Sync Status".bold().cyan());
     println!();
-
-    if !other_path.exists() {
-        anyhow::bail!("Path to watch not found: {}", other_path.display());
-    }
 
     let master_password = prompt_master_password()?;
-    // Fail fast on a wrong password instead of only discovering it once a
-    // change eventually comes in.
-    Vault::unlock(vault_path, &master_password)
+    let mut vault = Vault::unlock(vault_path, &master_password)
         .context("Failed to unlock vault (wrong password?)")?;
 
+    match vault.sync_salt() {
+        None => {
+            println!("{}", "Sync has not been set up for this vault yet.".yellow());
+            println!("It will be automatically the next time you add, update, or delete an entry.");
+        }
+        Some(_) => match SyncHandle::for_vault(&vault, &master_password) {
+            Some(handle) => {
+                let changed = handle.pull_and_apply(&mut vault);
+                if changed > 0 {
+                    vault.save(&master_password).context("Failed to save synced changes")?;
+                }
+                println!("{}: {}", "pass-syncd".bold(), "reachable".green());
+                println!("{}: {}", "Entries after sync".bold(), vault.len());
+                if changed > 0 {
+                    println!("{}: {}", "Just synced".bold(), format!("{changed} change(s) from another device").green());
+                }
+            }
+            None => println!("{}: {}", "pass-syncd".bold(), "unreachable (not installed or not running?)".red()),
+        },
+    }
     println!();
-    println!("Checking for changes already waiting in {}…", other_path.display());
-    run_merge(vault_path, other_path, publish, &master_password)?;
 
-    println!();
-    println!(
-        "Watching {} for changes. Press Ctrl+C to stop.",
-        other_path.display()
-    );
-    println!();
-
-    watch_and_merge(vault_path, other_path, publish, &master_password, debounce_ms, None)
+    Ok(())
 }
 
-/// Core watch loop: blocks on filesystem events for `other_path` and
-/// re-merges whenever it changes. `max_iterations` bounds how many merges
-/// to perform before returning (`None` runs until the watch channel closes,
-/// which in practice means forever); it exists so this loop can be driven
-/// deterministically from a test instead of running forever.
-fn watch_and_merge(
-    vault_path: &Path,
-    other_path: &Path,
-    publish: &Option<PathBuf>,
-    master_password: &str,
-    debounce_ms: u64,
-    max_iterations: Option<usize>,
-) -> Result<()> {
-    let watch_dir = match other_path.parent() {
-        Some(p) if !p.as_os_str().is_empty() => p,
-        _ => Path::new("."),
+/// Pulls and applies any changes `pass-syncd` has for this vault, saving if
+/// anything actually changed. Best-effort and silent when there's nothing
+/// new or the daemon isn't reachable — see [`SyncHandle`]'s own doc
+/// comment for the full non-fatal-by-design contract.
+fn sync_pull(vault: &mut Vault, master_password: &str) -> Result<()> {
+    let Some(handle) = SyncHandle::for_vault(vault, master_password) else {
+        return Ok(());
     };
-    let target_name = other_path.file_name().map(|n| n.to_owned());
-
-    let (tx, rx) = mpsc::channel();
-    let mut watcher = notify::recommended_watcher(move |res: notify::Result<Event>| {
-        if let Ok(event) = res {
-            let _ = tx.send(event);
-        }
-    })
-    .context("Failed to start filesystem watcher")?;
-    watcher
-        .watch(watch_dir, RecursiveMode::NonRecursive)
-        .context("Failed to watch directory")?;
-
-    let mut merges_done = 0;
-    loop {
-        let first = match rx.recv() {
-            Ok(event) => event,
-            Err(_) => break, // watcher was dropped / channel closed
-        };
-        if !event_touches(&first, target_name.as_deref()) {
-            continue;
-        }
-
-        // Drain further events for a short quiet period so a single atomic
-        // save (which can fire create + modify + rename events) triggers
-        // exactly one merge instead of several.
-        while rx.recv_timeout(Duration::from_millis(debounce_ms)).is_ok() {}
-
-        if let Err(e) = run_merge(vault_path, other_path, publish, master_password) {
-            println!("{}", format!("⚠️  Merge failed: {}", e).red());
-        }
-
-        merges_done += 1;
-        if max_iterations.is_some_and(|max| merges_done >= max) {
-            break;
-        }
+    let changed = handle.pull_and_apply(vault);
+    if changed > 0 {
+        vault.save(master_password).context("Failed to save synced changes")?;
+        println!("{}", format!("🔄 Synced {changed} change(s) from another device.").bright_black());
     }
-
     Ok(())
 }
 
-/// Whether a filesystem event is plausibly about the watched file. Some
-/// platforms report events without a path, in which case we merge anyway
-/// (a no-op merge is harmless) rather than risk missing a real change.
-fn event_touches(event: &Event, target_name: Option<&std::ffi::OsStr>) -> bool {
-    event.paths.is_empty()
-        || event
-            .paths
-            .iter()
-            .any(|p| p.file_name() == target_name)
+/// Pushes entry `id`'s current state to `pass-syncd`. `salt` must come from
+/// [`Vault::ensure_sync_salt`] called *before* the local mutation was
+/// saved (so a freshly generated salt is already on disk by the time this
+/// runs, not stranded in memory for one process only) — every call site
+/// below follows that order. Best-effort — see [`SyncHandle::push_upsert`].
+fn sync_push_upsert(vault: &Vault, master_password: &str, salt: [u8; 16], id: &str) {
+    if let Ok(entry) = vault.get_entry(id) {
+        SyncHandle::new(vault.path(), salt, master_password).push_upsert(&entry);
+    }
 }
 
-/// Merge `other_path` into the vault at `vault_path`, save if anything
-/// changed, and optionally publish a copy of the result to `publish`.
-fn run_merge(
-    vault_path: &Path,
-    other_path: &Path,
-    publish: &Option<PathBuf>,
-    master_password: &str,
-) -> Result<()> {
-    if !other_path.exists() {
-        // Transient: a sync client can briefly remove/replace the file
-        // mid-write. Nothing to merge yet; the next event will catch it.
-        return Ok(());
-    }
-
-    let mut vault =
-        Vault::unlock(vault_path, master_password).context("Failed to unlock local vault")?;
-
-    let summary = vault
-        .merge_from_file(other_path, master_password)
-        .context("Failed to merge (wrong password on the watched vault?)")?;
-
-    if !summary.changed() {
-        println!("No changes in {}.", other_path.display());
-        return Ok(());
-    }
-
-    vault.save(master_password).context("Failed to save merged vault")?;
-
-    println!(
-        "{}",
-        format!(
-            "🔄 Merged from {} — created {}, updated {}, {} deleted.",
-            other_path.display(),
-            summary.created,
-            summary.updated,
-            summary.deleted
-        )
-        .green()
-    );
-
-    if let Some(publish_path) = publish {
-        std::fs::copy(vault_path, publish_path)
-            .with_context(|| format!("Failed to publish merged vault to {}", publish_path.display()))?;
-        println!("   Published to {}", publish_path.display());
-    }
-
-    Ok(())
+/// Pushes entry `id`'s deletion to `pass-syncd`. See [`sync_push_upsert`]
+/// for the salt-ordering contract.
+fn sync_push_delete(vault: &Vault, master_password: &str, salt: [u8; 16], id: &str) {
+    SyncHandle::new(vault.path(), salt, master_password).push_delete(id);
 }
 
 /// Prompt for master password securely
@@ -776,77 +693,6 @@ mod totp_tests {
     }
 }
 
-#[cfg(test)]
-mod watch_tests {
-    use super::*;
-    use std::ffi::OsStr;
-
-    #[test]
-    fn event_touches_matches_only_the_target_filename() {
-        let target: Option<&OsStr> = Some(OsStr::new("passwords.kdbx"));
-
-        let matching = Event::new(notify::EventKind::Modify(notify::event::ModifyKind::Any))
-            .add_path(PathBuf::from("/tmp/sync/passwords.kdbx"));
-        assert!(event_touches(&matching, target));
-
-        let unrelated = Event::new(notify::EventKind::Modify(notify::event::ModifyKind::Any))
-            .add_path(PathBuf::from("/tmp/sync/other-file.txt"));
-        assert!(!event_touches(&unrelated, target));
-
-        let pathless = Event::new(notify::EventKind::Modify(notify::event::ModifyKind::Any));
-        assert!(event_touches(&pathless, target));
-    }
-
-    /// Drives the real filesystem watcher end-to-end. Not run by default
-    /// (`cargo test`) since inotify/FSEvents availability and timing vary
-    /// across sandboxes and CI runners; run explicitly with
-    /// `cargo test -- --ignored` to verify the watcher works on a given
-    /// machine.
-    #[test]
-    #[ignore]
-    fn watch_and_merge_picks_up_an_external_change() {
-        let dir = tempfile::tempdir().unwrap();
-        let vault_path = dir.path().join("local.kdbx");
-        let other_path = dir.path().join("other.kdbx");
-        let password = "watch_test_password_123";
-
-        Vault::init(&vault_path, password).unwrap();
-
-        std::fs::copy(&vault_path, &other_path).unwrap();
-        let mut other_vault = Vault::unlock(&other_path, password).unwrap();
-        let entry = PasswordEntry::new(
-            "Test".to_string(),
-            "https://test.com".to_string(),
-            "user".to_string(),
-            "pw".to_string(),
-        );
-        other_vault.add_entry(entry).unwrap();
-
-        let (done_tx, done_rx) = mpsc::channel();
-        let (v, o, p) = (vault_path.clone(), other_path.clone(), password.to_string());
-        std::thread::spawn(move || {
-            let result = watch_and_merge(&v, &o, &None, &p, 200, Some(1));
-            let _ = done_tx.send(result);
-        });
-
-        // Give the watcher time to start before triggering the change it
-        // should observe.
-        std::thread::sleep(Duration::from_millis(300));
-        other_vault.save(password).unwrap();
-
-        // Generous timeout: run_merge derives an Argon2id key (deliberately
-        // expensive: 64 MB / 3 iterations) up to three times per merge, on
-        // top of whatever latency the filesystem watcher itself adds.
-        done_rx
-            .recv_timeout(Duration::from_secs(30))
-            .expect("watcher did not react within 30s")
-            .unwrap();
-
-        let merged = Vault::unlock(&vault_path, password).unwrap();
-        assert_eq!(merged.len(), 1);
-    }
-}
-
 /// Interactive mode - menu-driven interface
 fn cmd_interactive(vault_path: &PathBuf) -> Result<()> {
     // Check if vault exists
@@ -865,12 +711,19 @@ fn cmd_interactive(vault_path: &PathBuf) -> Result<()> {
     let master_password = prompt_master_password()?;
     let mut vault = Vault::unlock(vault_path, &master_password)
         .context("Failed to unlock vault (wrong password?)")?;
+    sync_pull(&mut vault, &master_password)?;
 
     // Display header
     print_header(&vault, vault_path);
 
     // Main loop
     loop {
+        // Best-effort refresh from other devices before every menu render —
+        // cheap (a no-op fast path once nothing changed, see
+        // SyncHandle::pull_and_apply's fingerprint check) and keeps a
+        // long-lived interactive session from going stale.
+        sync_pull(&mut vault, &master_password)?;
+
         match show_main_menu()? {
             MainMenuAction::ListAll => {
                 if let Err(e) = interactive_list(&vault) {
@@ -1063,8 +916,10 @@ fn interactive_add(vault: &mut Vault, master_password: &str) -> Result<()> {
         .context("Failed to read password")?;
 
     let entry = PasswordEntry::new(website.clone(), url, username, password);
-    vault.add_entry(entry)?;
+    let id = vault.add_entry(entry)?;
+    let salt = vault.ensure_sync_salt();
     vault.save(master_password)?;
+    sync_push_upsert(vault, master_password, salt, &id);
 
     println!();
     println!("{}", format!("✅ '{}' added successfully!", website).green().bold());
@@ -1137,7 +992,9 @@ fn interactive_edit(vault: &mut Vault, master_password: &str) -> Result<()> {
     };
 
     vault.update_entry(&entry_id, Some(website), Some(url), Some(username), password, None, None)?;
+    let salt = vault.ensure_sync_salt();
     vault.save(master_password)?;
+    sync_push_upsert(vault, master_password, salt, &entry_id);
 
     println!();
     println!("{}", "✅ Password updated successfully!".green().bold());
@@ -1186,7 +1043,9 @@ fn interactive_delete(vault: &mut Vault, master_password: &str) -> Result<()> {
     }
 
     vault.delete_entry(&entry_id)?;
+    let salt = vault.ensure_sync_salt();
     vault.save(master_password)?;
+    sync_push_delete(vault, master_password, salt, &entry_id);
 
     println!();
     println!("{}", "✅ Password deleted successfully!".green().bold());

@@ -214,19 +214,20 @@ Run just the Python suite (skipping the Rust tests and the venv/install
 steps, e.g. once your virtualenv already exists) with
 `tests/.venv/bin/python3 tests/run_tests.py`.
 
+## Cross-device sync
+
+Every vault action the popup performs goes through `pass-native-host`,
+which itself pulls any changes the local [`pass-syncd`](../pass-syncd/)
+daemon has for this vault (and pushes anything you just changed) — see the
+top-level README's "Cross-device sync" section for installing/pairing it.
+No extra plumbing was needed on the extension side for this: the host is
+stateless and re-unlocks fresh per message already, so "pull before
+responding" fits its existing design. The **Merge** panel in the popup is
+still there too, but it's now positioned as a one-off import tool for an
+unrelated KDBX file, not the cross-device sync mechanism.
+
 ## Limitations / not included here
 
-- Talking to Nextcloud's WebDAV API directly — this assumes a filesystem
-  sync client (e.g. the Nextcloud desktop app) already keeps a copy of the
-  vault up to date locally.
-- Automatic merging from the extension itself. The CLI now has this
-  (`pass watch <other-vault> --publish <path>`, see the main README) using
-  real filesystem events, but wiring the same auto-merge into the browser
-  (so the popup refreshes itself when another device's changes land)
-  would need a persistent connection from the extension to the native
-  host, which is awkward under Manifest V3's service worker lifecycle —
-  not implemented here. Today you trigger the merge on demand from the
-  popup's **Merge** panel, or just run `pass watch` alongside it.
 - The save/update prompt's "is this a login/signup submission" detection is
   heuristic (real form submit, Enter, or a button whose text looks like
   login/signup/continue) — it covers plain `<form>` sites and typical SPA

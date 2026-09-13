@@ -11,7 +11,7 @@
 //! used regardless so the host also works correctly if the extension opts
 //! into a long-lived `chrome.runtime.connectNative` port instead.
 
-use passlib::{PasswordEntry, Vault};
+use passlib::{PasswordEntry, SyncHandle, Vault};
 use serde_json::{json, Value};
 use std::io::{self, Read, Write};
 
@@ -107,6 +107,35 @@ fn optional_string_array_field(req: &Value, name: &str) -> Option<Vec<String>> {
         .map(|arr| arr.iter().filter_map(Value::as_str).map(str::to_string).collect())
 }
 
+/// Pulls and applies any changes `pass-syncd` has for this vault, saving if
+/// anything actually changed. Called right after every unlock (this host
+/// re-unlocks fresh per stateless message, so "right after unlock" already
+/// means "before every response"): the Chromium extension picks up other
+/// devices' changes on every popup open/action with no JS-side changes
+/// needed. Best-effort/never fails the request — see [`SyncHandle`]'s own
+/// doc comment.
+fn sync_pull(vault: &mut Vault, master_password: &str) {
+    if let Some(handle) = SyncHandle::for_vault(vault, master_password) {
+        if handle.pull_and_apply(vault) > 0 {
+            let _ = vault.save(master_password);
+        }
+    }
+}
+
+/// Pushes entry `id`'s current state to `pass-syncd`. `salt` must come from
+/// [`Vault::ensure_sync_salt`] called *before* the mutation was saved, same
+/// ordering contract as passcli's helper of the same name.
+fn sync_push_upsert(vault: &Vault, master_password: &str, salt: [u8; 16], id: &str) {
+    if let Ok(entry) = vault.get_entry(id) {
+        SyncHandle::new(vault.path(), salt, master_password).push_upsert(&entry);
+    }
+}
+
+/// Pushes entry `id`'s deletion to `pass-syncd`. See [`sync_push_upsert`].
+fn sync_push_delete(vault: &Vault, master_password: &str, salt: [u8; 16], id: &str) {
+    SyncHandle::new(vault.path(), salt, master_password).push_delete(id);
+}
+
 fn vault_exists(req: &Value) -> Result<Value, String> {
     let path = field(req, "vaultPath")?;
     Ok(json!({ "exists": std::path::Path::new(path).exists() }))
@@ -123,7 +152,8 @@ fn unlock_vault(req: &Value) -> Result<Value, String> {
     let path = field(req, "vaultPath")?;
     let password = field(req, "masterPassword")?;
 
-    let vault = Vault::unlock(path, password).map_err(|e| e.to_string())?;
+    let mut vault = Vault::unlock(path, password).map_err(|e| e.to_string())?;
+    sync_pull(&mut vault, password);
     let entries = vault.list_entries().map_err(|e| e.to_string())?;
     Ok(json!({ "entries": entries }))
 }
@@ -133,7 +163,8 @@ fn get_entry(req: &Value) -> Result<Value, String> {
     let password = field(req, "masterPassword")?;
     let id = field(req, "id")?;
 
-    let vault = Vault::unlock(path, password).map_err(|e| e.to_string())?;
+    let mut vault = Vault::unlock(path, password).map_err(|e| e.to_string())?;
+    sync_pull(&mut vault, password);
     let entry = vault.get_entry(id).map_err(|e| e.to_string())?;
     Ok(json!({ "entry": entry_to_json(&entry) }))
 }
@@ -145,7 +176,8 @@ fn get_entry_history(req: &Value) -> Result<Value, String> {
     let password = field(req, "masterPassword")?;
     let id = field(req, "id")?;
 
-    let vault = Vault::unlock(path, password).map_err(|e| e.to_string())?;
+    let mut vault = Vault::unlock(path, password).map_err(|e| e.to_string())?;
+    sync_pull(&mut vault, password);
     let entry = vault.get_entry(id).map_err(|e| e.to_string())?;
     let history: Vec<Value> = entry
         .history
@@ -168,7 +200,9 @@ fn add_entry(req: &Value) -> Result<Value, String> {
     entry.notes = optional_field(req, "notes").unwrap_or_default();
     entry.additional_urls = optional_string_array_field(req, "additionalUrls").unwrap_or_default();
     let id = vault.add_entry(entry).map_err(|e| e.to_string())?;
+    let salt = vault.ensure_sync_salt();
     vault.save(password).map_err(|e| e.to_string())?;
+    sync_push_upsert(&vault, password, salt, &id);
     Ok(json!({ "id": id }))
 }
 
@@ -189,7 +223,9 @@ fn update_entry(req: &Value) -> Result<Value, String> {
             optional_string_array_field(req, "additionalUrls"),
         )
         .map_err(|e| e.to_string())?;
+    let salt = vault.ensure_sync_salt();
     vault.save(password).map_err(|e| e.to_string())?;
+    sync_push_upsert(&vault, password, salt, id);
     Ok(json!({}))
 }
 
@@ -200,7 +236,9 @@ fn delete_entry(req: &Value) -> Result<Value, String> {
 
     let mut vault = Vault::unlock(path, password).map_err(|e| e.to_string())?;
     vault.delete_entry(id).map_err(|e| e.to_string())?;
+    let salt = vault.ensure_sync_salt();
     vault.save(password).map_err(|e| e.to_string())?;
+    sync_push_delete(&vault, password, salt, id);
     Ok(json!({}))
 }
 
@@ -214,7 +252,9 @@ fn add_totp_uri(req: &Value) -> Result<Value, String> {
 
     let mut vault = Vault::unlock(path, password).map_err(|e| e.to_string())?;
     vault.set_entry_totp(id, totp).map_err(|e| e.to_string())?;
+    let salt = vault.ensure_sync_salt();
     vault.save(password).map_err(|e| e.to_string())?;
+    sync_push_upsert(&vault, password, salt, id);
     Ok(json!({}))
 }
 
@@ -225,7 +265,9 @@ fn remove_totp(req: &Value) -> Result<Value, String> {
 
     let mut vault = Vault::unlock(path, password).map_err(|e| e.to_string())?;
     vault.clear_entry_totp(id).map_err(|e| e.to_string())?;
+    let salt = vault.ensure_sync_salt();
     vault.save(password).map_err(|e| e.to_string())?;
+    sync_push_upsert(&vault, password, salt, id);
     Ok(json!({}))
 }
 
@@ -238,7 +280,20 @@ fn merge_from_file(req: &Value) -> Result<Value, String> {
     let summary = vault
         .merge_from_file(other_path, password)
         .map_err(|e| e.to_string())?;
+    let salt = vault.ensure_sync_salt();
     vault.save(password).map_err(|e| e.to_string())?;
+
+    // Unlike a single add/update/delete, a merge can touch many entries at
+    // once with no single id to push — so every entry gets a (cheap,
+    // loopback-only) push instead, ensuring devices don't have to wait for
+    // each merged entry's next individual edit to pick it up over sync too.
+    if summary.changed() {
+        if let Ok(entries) = vault.list_entries() {
+            for e in entries {
+                sync_push_upsert(&vault, password, salt, &e.id);
+            }
+        }
+    }
 
     Ok(json!({
         "created": summary.created,

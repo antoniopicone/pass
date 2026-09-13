@@ -26,7 +26,8 @@ binary (see "KDBX4 / KeePassXC compatibility" below).
 - **🔍 Powerful Search**: Find passwords by website name, username, or URL
 - **📋 Clean Interface**: Colorized output with intuitive navigation
 - **🔐 Traditional CLI**: Full command-line support for scripting and automation
-- **💾 KeePassXC-compatible vault**: Single `.kdbx` file, openable directly in KeePassXC, easy to backup and sync
+- **💾 KeePassXC-compatible vault**: Single `.kdbx` file, openable directly in KeePassXC, easy to back up
+- **🔄 Real-time cross-device sync**: Every add/update/delete syncs automatically across your devices via [`pass-syncd`](#-cross-device-sync) — no shared folder, no manual step
 - **🌍 Cross-Platform**: Works on macOS, Linux, and Windows
 - **🔢 Built-in MFA codes**: Store TOTP secrets (scan the QR code or paste the URI) and generate 2FA codes alongside each entry, using the same `otp` field convention as KeePassXC
 
@@ -206,39 +207,47 @@ field (an `otpauth://` URI) using the exact convention KeePassXC uses, so
 a code set up in `pass` shows up correctly in KeePassXC's own TOTP button
 and vice versa.
 
-## 🔀 Merging vaults across devices
+## 🔄 Cross-device sync
 
-Cross-device sync is just [`keepass::Database::merge`](https://docs.rs/keepass) —
-the same database-merge logic KeePassXC itself ships — reconciling two
-independently-edited copies of the vault using each entry's KDBX
-last-modification timestamp, with deletions propagating via the Recycle
-Bin group rather than a custom tombstone scheme. No proprietary merge
-format, no shared sync history required.
+Every client in this repo — the CLI, the Chromium extension, the GNOME app,
+and the macOS/iOS app — pushes each change to a small local daemon,
+[`pass-syncd`](pass-syncd/), the instant it happens while the vault is
+unlocked, and pulls other devices' changes the same way. `pass-syncd`
+replicates an encrypted, content-agnostic op log peer-to-peer over your
+[Tailscale](https://tailscale.com) tailnet (or a trusted LAN), using the
+CRDT design proven in the sibling
+[`reading-list-syncd`](https://github.com/antoniopicone/karakeep-browser-extension/tree/main/native/reading-list-syncd)
+project. Every entry is encrypted (AES-256-GCM, keyed by your master
+password) before it ever reaches the daemon — see
+[`pass-syncd/README.md`](pass-syncd/README.md) for the full design.
+
+**Setup**, once per device:
 
 ```bash
-# Pull changes from another copy of the vault (e.g. synced via Nextcloud)
-pass merge /path/to/synced/passwords.kdbx
-
-# Or do it automatically: watch that copy and merge every time it changes
-# (e.g. because the Nextcloud client just synced it down from another
-# device), optionally publishing the merged result back to a shared path
-# so other devices can pick it up too.
-pass watch /path/to/synced/passwords.kdbx --publish /path/to/synced/passwords.kdbx
+cd pass-syncd/service
+./install-systemd.sh   # Linux
+./install-launchd.sh   # macOS
+.\install-windows.ps1  # Windows (PowerShell)
 ```
 
-`pass watch` uses native filesystem events (inotify/FSEvents/ReadDirectoryChangesW
-via the `notify` crate), debounces the burst of events a single atomic save
-produces, and re-merges automatically — this is the piece that turns the
-manual `pass merge` step into always-on sync across devices sharing a
-Nextcloud (or any file-sync) folder.
+Then put the same vault file (copied once by hand, same master password) on
+each device and open it with any client — pairing over the tailnet is
+automatic, and every add/update/delete syncs from then on. Check status any
+time with `pass sync`.
+
+This isn't for importing an *unrelated* KDBX file (e.g. a database someone
+else sent you) — `pass merge <other-file.kdbx>` still handles that one-off
+case, via [`keepass::Database::merge`](https://docs.rs/keepass) (the same
+logic KeePassXC itself ships, reconciling by last-modification timestamp).
 
 ## 🌐 Chromium extension
 
 `chrome-extension/` contains a Manifest V3 extension that unlocks the vault,
-searches/copies/autofills entries, and can trigger the same merge from its
-popup. It talks to the vault through a small native messaging host
-(`pass-native-host`) rather than over the network. See
-`chrome-extension/README.md` for setup.
+searches/copies/autofills entries, and can trigger a one-off KDBX import
+from its popup. It talks to the vault through a small native messaging host
+(`pass-native-host`) rather than over the network — that host already pulls
+and pushes to `pass-syncd` on every action, so the extension gets real-time
+sync automatically. See `chrome-extension/README.md` for setup.
 
 ## 🐧 GNOME app
 
@@ -246,8 +255,9 @@ popup. It talks to the vault through a small native messaging host
 directly — no FFI hop needed since both are Rust). It covers the same core
 flows as the CLI: unlock/create a vault, search entries, reveal/copy
 password and MFA code with a live countdown, add/edit/delete, attach an MFA
-secret by pasting an `otpauth://` URI or picking a QR code image, and merge
-in another vault copy from the header menu.
+secret by pasting an `otpauth://` URI or picking a QR code image, and import
+another vault file from the header menu — plus a background sync pull every
+few seconds while unlocked, so another device's changes show up live.
 
 ```bash
 cargo run --release -p pass-gnome
@@ -260,8 +270,9 @@ Requires GTK4 ≥ 4.12 and libadwaita ≥ 1.5 development packages installed
 
 `pass-apple/` has a shared SwiftUI app (unlock/create, search, view/reveal/
 copy password and MFA code with a live countdown, add/edit/delete, attach
-MFA via `otpauth://` URI or a QR photo scanned with Vision, merge another
-vault copy) for both platforms, backed by `passlib_ffi`.
+MFA via `otpauth://` URI or a QR photo scanned with Vision, import another
+vault file) for both platforms, backed by `passlib_ffi` — including a
+background sync pull every few seconds while unlocked, same as `pass-gnome`.
 
 **Unlike every other client in this repo, this one is unverified.** It was
 written in a Linux sandbox with no Xcode, no macOS/iOS SDK, and no way to
@@ -276,14 +287,17 @@ Xcode) to build and fix it on a real Mac.
 The project is organized as a Rust workspace with these packages:
 
 - **`passlib`**: Core library — KDBX4 vault storage (via the `keepass`
-  crate), cross-device merge, and TOTP/MFA code generation
+  crate), the real-time sync client (`SyncHandle`, talking to `pass-syncd`),
+  one-off KDBX import merge, and TOTP/MFA code generation
 - **`passcli`**: Command-line interface application
-- **`passlib_ffi`**: C-compatible FFI bindings — init/unlock/CRUD, merge,
-  and MFA/TOTP — used by `pass-apple`'s Swift wrapper
+- **`passlib_ffi`**: C-compatible FFI bindings — init/unlock/CRUD, sync,
+  merge, and MFA/TOTP — used by `pass-apple`'s Swift wrapper
 - **`pass-native-host`**: Native messaging host bridging the Chromium
   extension to `passlib`
 - **`pass-gnome`**: Native GTK4/libadwaita desktop app for Linux
 - **`pass-apple`**: Shared SwiftUI app for macOS/iOS (unverified — see above)
+- **`pass-syncd`**: The real-time cross-device sync daemon every client
+  above talks to — see [`pass-syncd/README.md`](pass-syncd/README.md)
 
 ### Library Structure
 
@@ -291,7 +305,8 @@ The project is organized as a Rust workspace with these packages:
 passlib/
 ├── src/
 │   ├── lib.rs      # Public API
-│   ├── vault.rs    # KDBX4 vault storage, CRUD, merge (via the `keepass` crate)
+│   ├── vault.rs    # KDBX4 vault storage, CRUD, one-off KDBX merge (via the `keepass` crate)
+│   ├── sync.rs     # Real-time sync client (SyncHandle) talking to pass-syncd
 │   ├── entry.rs    # Password entry data structures
 │   ├── totp.rs     # RFC 6238 TOTP + otpauth:// URI (de)serialization
 │   └── error.rs    # Error types
@@ -312,10 +327,11 @@ cargo test -- --nocapture
 ## 📋 Requirements
 
 - **Rust**: 1.70 or later
-- **Supported Platforms**: 
-  - macOS (Intel & Apple Silicon)
-  - Linux (x86_64, ARM64)
-  - Windows (planned)
+- **Supported Platforms**:
+  - macOS (Intel & Apple Silicon) — CLI, `pass-syncd`, Chromium extension, native SwiftUI app (`pass-apple/`)
+  - Linux (x86_64, ARM64) — CLI, `pass-syncd`, Chromium extension, native GNOME app (`pass-gnome/`)
+  - Windows — CLI, `pass-syncd`, Chromium extension (see each's own install script under `service/`/`native-host/`)
+  - iOS — same SwiftUI app as macOS, see `pass-apple/`
 
 ## 🔒 Security Considerations
 
@@ -366,12 +382,11 @@ Contributions are welcome! Please feel free to submit a Pull Request.
       record-keeping is feasible; acting as a real authenticator the
       browser invokes during login needs OS-level CTAP2 integration and is
       a materially bigger project than the rest of this roadmap
-- [x] Browser extension (Chromium, local vault + merge — see `chrome-extension/`)
-- [x] File-watcher auto-merge (`pass watch`, see above)
+- [x] Browser extension (Chromium, local vault + real-time sync — see `chrome-extension/`)
+- [x] Real-time cross-device sync (`pass-syncd`, replacing the old
+      file-watcher/shared-folder auto-merge — see "Cross-device sync" above)
 - [x] KDBX4 / KeePassXC-compatible vault format (verified against real
       `keepassxc-cli` in both directions — see above)
-- [ ] Direct Nextcloud WebDAV client (today `pass watch` expects a
-      filesystem-synced copy, e.g. from the Nextcloud desktop client)
 
 ## ⚠️ Disclaimer
 
