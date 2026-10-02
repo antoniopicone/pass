@@ -235,6 +235,43 @@ final class AppState: ObservableObject {
         }
     }
 
+    // MARK: - Import from Apple Passwords
+
+    /// Imports the CSV the user exported from Apple Passwords (see
+    /// `AppleImportView`), then — unless told not to — deletes it, since it
+    /// holds every password in plain text. The picked URL may be
+    /// security-scoped (always on iOS, on macOS only if sandboxed), so the
+    /// whole read-and-delete happens inside one access window. Throws
+    /// (rather than setting `errorMessage`, which only the locked screen
+    /// shows) so the sheet can keep itself open and show what went wrong,
+    /// e.g. a CSV that isn't an Apple Passwords export.
+    func importApplePasswords(from url: URL, deleteAfterImport: Bool) throws {
+        guard let vault else { return }
+        let didAccess = url.startAccessingSecurityScopedResource()
+        defer { if didAccess { url.stopAccessingSecurityScopedResource() } }
+
+        let summary = try vault.importApplePasswords(fromCSV: url.path)
+        try reload()
+
+        var message = "Imported \(summary.imported) from Apple Passwords"
+        if summary.alreadyPresent > 0 {
+            message += ", \(summary.alreadyPresent) already in the vault"
+        }
+        if summary.skipped > 0 {
+            message += ", \(summary.skipped) without a password skipped"
+        }
+        message += "."
+
+        if deleteAfterImport {
+            do {
+                try FileManager.default.removeItem(at: url)
+            } catch {
+                message += " Couldn't delete the export file — delete it yourself."
+            }
+        }
+        statusMessage = message
+    }
+
     // MARK: - Picking a vault file
 
     /// Handles a vault file the user picked via `.fileImporter`. On iOS the

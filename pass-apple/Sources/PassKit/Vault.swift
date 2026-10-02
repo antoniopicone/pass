@@ -199,6 +199,28 @@ public final class Vault: @unchecked Sendable {
         )
     }
 
+    /// Import the logins from an Apple Passwords CSV export (Passwords →
+    /// File → Export All Passwords to File…) and persist the vault. Logins
+    /// the vault already has are skipped, so importing the same export
+    /// twice is harmless. The CSV itself is left untouched — deleting it
+    /// is up to the caller.
+    public func importApplePasswords(fromCSV csvPath: String) throws -> AppleImportSummary {
+        var imported: size_t = 0
+        var alreadyPresent: size_t = 0
+        var skipped: size_t = 0
+
+        let result = csvPath.withCString { pathPtr in
+            vault_import_apple_passwords_csv(handle, pathPtr, &imported, &alreadyPresent, &skipped)
+        }
+        try check(result)
+
+        return AppleImportSummary(
+            imported: Int(imported),
+            alreadyPresent: Int(alreadyPresent),
+            skipped: Int(skipped)
+        )
+    }
+
     /// Whether `pass-syncd` already knows of an existing synced vault on
     /// this network (some other device set one up first) — no vault needs
     /// to be open yet to check, since this is meant to be called right

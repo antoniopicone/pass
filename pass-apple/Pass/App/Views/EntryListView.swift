@@ -7,6 +7,7 @@ struct EntryListView: View {
     @State private var searchText = ""
     @State private var showAddSheet = false
     @State private var showMergeSheet = false
+    @State private var showAppleImportSheet = false
     @State private var showSettingsSheet = false
     @State private var selectedEntryId: String?
 
@@ -54,6 +55,11 @@ struct EntryListView: View {
                             Label("Merge From File…", systemImage: "arrow.triangle.merge")
                         }
                         Button {
+                            showAppleImportSheet = true
+                        } label: {
+                            Label("Import from Apple Passwords…", systemImage: "key.icloud")
+                        }
+                        Button {
                             showSettingsSheet = true
                         } label: {
                             Label("Settings…", systemImage: "gearshape")
@@ -73,6 +79,9 @@ struct EntryListView: View {
             }
             .sheet(isPresented: $showMergeSheet) {
                 MergeView()
+            }
+            .sheet(isPresented: $showAppleImportSheet) {
+                AppleImportView()
             }
             .sheet(isPresented: $showSettingsSheet) {
                 SettingsView()

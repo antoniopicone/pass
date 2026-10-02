@@ -67,6 +67,21 @@ enum Commands {
         other: PathBuf,
     },
 
+    /// Import the passwords saved in Apple Passwords (iCloud Keychain),
+    /// from the CSV the Passwords app exports (File → Export All Passwords
+    /// to File…). Without a path, opens Passwords and walks you through
+    /// the export. Logins the vault already has are skipped.
+    #[cfg(target_os = "macos")]
+    ImportApple {
+        /// Path to the CSV exported from Apple Passwords
+        csv: Option<PathBuf>,
+
+        /// Don't offer to delete the CSV afterwards (it holds every
+        /// password in plain text)
+        #[arg(long)]
+        keep_file: bool,
+    },
+
     /// Manage TOTP/MFA codes for an entry
     Totp {
         #[command(subcommand)]
@@ -123,6 +138,8 @@ fn main() -> Result<()> {
         Commands::Delete { id } => cmd_delete(&vault_path, &id),
         Commands::Update { id } => cmd_update(&vault_path, &id),
         Commands::Merge { other } => cmd_merge(&vault_path, &other),
+        #[cfg(target_os = "macos")]
+        Commands::ImportApple { csv, keep_file } => cmd_import_apple(&vault_path, csv, keep_file),
         Commands::Totp { action } => cmd_totp(&vault_path, action),
         Commands::Sync => cmd_sync_status(&vault_path),
         Commands::Interactive => cmd_interactive(&vault_path),
@@ -486,6 +503,137 @@ fn cmd_merge(vault_path: &PathBuf, other_path: &PathBuf) -> Result<()> {
     Ok(())
 }
 
+/// Import logins from an Apple Passwords CSV export (see
+/// [`passlib::apple_passwords`]). macOS only: that's where the Passwords
+/// app can export them.
+#[cfg(target_os = "macos")]
+fn cmd_import_apple(vault_path: &Path, csv: Option<PathBuf>, keep_file: bool) -> Result<()> {
+    println!("{}", "🍎 Import from Apple Passwords".bold().cyan());
+    println!();
+
+    let csv_path = match csv {
+        Some(path) => path,
+        None => prompt_apple_export_path()?,
+    };
+    if !csv_path.is_file() {
+        anyhow::bail!("CSV file not found: {}", csv_path.display());
+    }
+
+    let parsed = passlib::apple_passwords::parse_csv_file(&csv_path)
+        .context("Failed to read the Apple Passwords export")?;
+    println!(
+        "Found {} login(s) in {}.",
+        parsed.entries.len(),
+        csv_path.display()
+    );
+    println!();
+
+    let (mut vault, master_password) = unlock_vault_interactive(vault_path)?;
+    // Pull other devices' changes first so logins they already added count
+    // as already present instead of being imported twice.
+    sync_pull(&mut vault, &master_password)?;
+
+    let summary = passlib::apple_passwords::import_parsed(&mut vault, parsed)
+        .context("Failed to import entries")?;
+
+    if summary.imported() > 0 {
+        let salt = vault.ensure_sync_salt();
+        vault.save(&master_password).context("Failed to save vault")?;
+        for id in &summary.imported_ids {
+            sync_push_upsert(&vault, &master_password, salt, id);
+        }
+    }
+
+    println!();
+    println!("{}", "✅ Import complete!".green().bold());
+    println!("   Imported:        {}", summary.imported());
+    println!("   Already present: {}", summary.already_present);
+    if summary.skipped_rows > 0 {
+        println!(
+            "   {}",
+            format!("Skipped (no password): {}", summary.skipped_rows).yellow()
+        );
+    }
+    println!();
+
+    if !keep_file {
+        let delete = Confirm::new()
+            .with_prompt("Delete the exported CSV now? It holds every password in plain text")
+            .default(true)
+            .interact()
+            .unwrap_or(false);
+        if delete {
+            match std::fs::remove_file(&csv_path) {
+                Ok(()) => println!("{}", "🗑️  Export file deleted.".green()),
+                Err(e) => println!("{}", format!("Could not delete {}: {e}", csv_path.display()).red()),
+            }
+        } else {
+            println!("{}", "⚠️  Remember to delete the export file yourself.".yellow());
+        }
+        println!();
+    }
+
+    Ok(())
+}
+
+/// Opens the Passwords app and walks the user through exporting a CSV,
+/// then asks where they saved it.
+#[cfg(target_os = "macos")]
+fn prompt_apple_export_path() -> Result<PathBuf> {
+    let opened = std::process::Command::new("open")
+        .args(["-a", "Passwords"])
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+
+    if opened {
+        println!("In the Passwords app that just opened:");
+        println!("  1. Choose {}", "File → Export All Passwords to File…".bold());
+        println!("  2. Save the CSV file somewhere you'll find it");
+    } else {
+        // Before macOS 15 there's no Passwords app; Safari does the export.
+        println!("Export your passwords from Safari:");
+        println!("  1. Choose {}", "File → Export → Passwords…".bold());
+        println!("  2. Save the CSV file somewhere you'll find it");
+    }
+    println!();
+
+    let raw = Input::<String>::new()
+        .with_prompt("Path to the exported CSV (you can drag the file here)")
+        .interact_text()
+        .context("Failed to read the CSV path")?;
+    Ok(normalize_dropped_path(&raw))
+}
+
+/// Turns what Terminal pastes for a dragged file (`/Users/me/My\ File.csv`,
+/// possibly quoted, possibly `~/…`) back into a plain path.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn normalize_dropped_path(raw: &str) -> PathBuf {
+    let trimmed = raw.trim();
+    let unquoted = ['"', '\'']
+        .iter()
+        .find_map(|q| trimmed.strip_prefix(*q).and_then(|s| s.strip_suffix(*q)))
+        .map(str::to_string)
+        .unwrap_or_else(|| {
+            let mut out = String::with_capacity(trimmed.len());
+            let mut chars = trimmed.chars();
+            while let Some(c) = chars.next() {
+                match c {
+                    '\\' => out.extend(chars.next()),
+                    _ => out.push(c),
+                }
+            }
+            out
+        });
+
+    match unquoted.strip_prefix("~/") {
+        Some(rest) => std::env::var_os("HOME")
+            .map(|home| PathBuf::from(home).join(rest))
+            .unwrap_or_else(|| PathBuf::from(&unquoted)),
+        None => PathBuf::from(unquoted),
+    }
+}
+
 /// Manage the TOTP/MFA secret attached to an entry
 fn cmd_totp(vault_path: &PathBuf, action: TotpAction) -> Result<()> {
     match action {
@@ -746,6 +894,28 @@ fn offer_howdy_enrollment(vault_path: &Path, master_password: &str) {
             Ok(()) => println!("{}", "✅ Face unlock enabled for this vault.".green()),
             Err(e) => println!("{}", format!("Could not enable face unlock: {e}").red()),
         }
+    }
+}
+
+#[cfg(test)]
+mod import_apple_tests {
+    use super::*;
+
+    #[test]
+    fn normalize_dropped_path_handles_terminal_drag_and_drop() {
+        assert_eq!(
+            normalize_dropped_path("/Users/me/Desktop/Passwords\\ Export.csv "),
+            PathBuf::from("/Users/me/Desktop/Passwords Export.csv")
+        );
+        assert_eq!(
+            normalize_dropped_path("'/Users/me/My File.csv'"),
+            PathBuf::from("/Users/me/My File.csv")
+        );
+        std::env::set_var("HOME", "/Users/me");
+        assert_eq!(
+            normalize_dropped_path("~/Passwords.csv"),
+            PathBuf::from("/Users/me/Passwords.csv")
+        );
     }
 }
 

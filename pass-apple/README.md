@@ -2,7 +2,8 @@
 
 A shared SwiftUI app (unlock/create vault, search, view/reveal/copy
 password and MFA code with a live countdown, add/edit/delete, attach MFA
-via `otpauth://` URI or a QR code photo, import another vault file) backed
+via `otpauth://` URI or a QR code photo, import another vault file,
+import from Apple Passwords' CSV export) backed
 by `passlib_ffi` — the same Rust core `pass`, `pass-gnome`, and the
 Chromium extension use, opening the same real KDBX4/KeePassXC-compatible
 `.kdbx` files. Every mutation pushes to the local
@@ -44,7 +45,7 @@ pass-apple/
     ├── RootView.swift         Locked ⇄ unlocked switch
     ├── AppState.swift         ObservableObject driving all vault operations
     ├── Clipboard.swift        Cross-platform copy-to-clipboard
-    └── Views/                 Unlock, entry list, entry detail, add/edit form, MFA attach, merge
+    └── Views/                 Unlock, entry list, entry detail, add/edit form, MFA attach, merge, Apple Passwords import
 ```
 
 ## Setup (on a Mac)
