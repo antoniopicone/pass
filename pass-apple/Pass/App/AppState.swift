@@ -9,11 +9,12 @@ import PassKit
 /// move to a background actor if that ever becomes noticeable.
 @MainActor
 final class AppState: ObservableObject {
-    /// Persisted across launches (in `UserDefaults`, just a file path — not
-    /// sensitive) so the app remembers the vault the user picked or created
-    /// last time instead of asking again on every launch.
+    /// Persisted across launches (in the App Group's `UserDefaults`, just a
+    /// file path — not sensitive) so the app remembers the vault the user
+    /// picked or created last time instead of asking again on every launch,
+    /// and the AutoFill extension opens the same one.
     @Published var vaultPath: String = AppState.loadVaultPath() {
-        didSet { UserDefaults.standard.set(vaultPath, forKey: Self.vaultPathDefaultsKey) }
+        didSet { SharedConfig.vaultPath = vaultPath }
     }
     @Published private(set) var entries: [PasswordEntry] = []
     @Published var errorMessage: String?
@@ -48,15 +49,27 @@ final class AppState: ObservableObject {
 
     var isUnlocked: Bool { vault != nil }
 
-    static func defaultVaultPath() -> String {
-        let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first
-        return documents?.appendingPathComponent("passwords.kdbx").path ?? "passwords.kdbx"
-    }
-
-    private static let vaultPathDefaultsKey = "PassVaultPath"
+    /// The vault path saved by an earlier version, in the app's own
+    /// (non-shared) defaults — kept so upgrading doesn't silently switch to
+    /// a new empty vault; Settings then offers to move it into the shared
+    /// container.
+    private static let legacyVaultPathDefaultsKey = "PassVaultPath"
 
     private static func loadVaultPath() -> String {
-        UserDefaults.standard.string(forKey: vaultPathDefaultsKey) ?? defaultVaultPath()
+        SharedConfig.vaultPath
+            ?? UserDefaults.standard.string(forKey: legacyVaultPathDefaultsKey)
+            ?? SharedConfig.defaultVaultPath
+    }
+
+    /// Whether the open vault lives where the AutoFill extension can read
+    /// it. When it doesn't, Settings offers `moveVaultToSharedContainer()`.
+    var isVaultInSharedContainer: Bool {
+        SharedConfig.isInSharedContainer(vaultPath)
+    }
+
+    /// Whether this build has an App Group at all (a team is selected).
+    var hasSharedContainer: Bool {
+        SharedConfig.containerURL != nil
     }
 
     // MARK: - Unlock / create / lock
@@ -66,6 +79,7 @@ final class AppState: ObservableObject {
             let opened = try Vault.unlock(atPath: vaultPath, masterPassword: password)
             vault = opened
             errorMessage = nil
+            rememberAsLastVault()
             try reload()
             offerBiometricEnrollmentIfNeeded(password: password)
             startSyncTimer()
@@ -83,6 +97,7 @@ final class AppState: ObservableObject {
             let created = try Vault.create(atPath: vaultPath, masterPassword: password)
             vault = created
             errorMessage = nil
+            rememberAsLastVault()
             try reload()
             offerBiometricEnrollmentIfNeeded(password: password)
             startSyncTimer()
@@ -104,6 +119,14 @@ final class AppState: ObservableObject {
         } catch {
             errorMessage = error.localizedDescription
         }
+    }
+
+    /// On macOS, points the CLI and the Chromium native host at the vault
+    /// this app has open, so all clients share one file. iOS has neither.
+    private func rememberAsLastVault() {
+        #if os(macOS)
+        Vault.rememberAsLastVault(path: vaultPath)
+        #endif
     }
 
     private func offerBiometricEnrollmentIfNeeded(password: String) {
@@ -152,6 +175,7 @@ final class AppState: ObservableObject {
         guard let vault else { return }
         entries = try vault.listEntries()
             .sorted { $0.website.localizedCaseInsensitiveCompare($1.website) == .orderedAscending }
+        CredentialIdentities.replace(with: entries)
     }
 
     func refresh() {
@@ -272,21 +296,43 @@ final class AppState: ObservableObject {
         statusMessage = message
     }
 
+    // MARK: - Shared container (AutoFill)
+
+    /// Moves the open vault into the App Group container, where the AutoFill
+    /// extension — and, on macOS, the bundled CLI and Chromium native host —
+    /// can reach it, then locks: the open handle would otherwise keep saving
+    /// to the old path. The biometric unlock is keyed by path, so it's
+    /// dropped and offered again after the next unlock with the password.
+    func moveVaultToSharedContainer() throws {
+        guard let container = SharedConfig.containerURL else {
+            throw PassError.unknown(detail: "No App Group is configured for this build — select a team in Xcode.")
+        }
+        let from = vaultPath
+        let to = container.appendingPathComponent(URL(fileURLWithPath: from).lastPathComponent).path
+
+        lock()
+        try Vault.relocate(from: from, to: to)
+        BiometricUnlock.forget(vaultPath: from)
+        vaultPath = to
+    }
+
     // MARK: - Picking a vault file
 
     /// Handles a vault file the user picked via `.fileImporter`. On iOS the
     /// picked URL is security-scoped and not guaranteed to stay valid
     /// across app launches or the many separate FFI calls a session makes,
-    /// so it's copied into the app's own Documents directory first; on
-    /// macOS (assumed not App-Sandboxed — see the setup README) the path
-    /// is used directly.
+    /// so it's copied into the App Group container first (where the
+    /// AutoFill extension can read it; Documents if there's no App Group);
+    /// on macOS (assumed not App-Sandboxed — see the setup README) the path
+    /// is used directly, and Settings offers to move it into the container.
     func importVaultFile(from url: URL) {
         #if os(iOS)
         let didAccess = url.startAccessingSecurityScopedResource()
         defer { if didAccess { url.stopAccessingSecurityScopedResource() } }
 
-        let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-        let destination = documents.appendingPathComponent(url.lastPathComponent)
+        let directory = SharedConfig.containerURL
+            ?? FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        let destination = directory.appendingPathComponent(url.lastPathComponent)
         do {
             if FileManager.default.fileExists(atPath: destination.path) {
                 try FileManager.default.removeItem(at: destination)

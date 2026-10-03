@@ -348,6 +348,13 @@ MFA via `otpauth://` URI or a QR photo scanned with Vision, import another
 vault file, import from Apple Passwords' CSV export) for both platforms, backed by `passlib_ffi` — including a
 background sync pull every few seconds while unlocked, same as `pass-gnome`.
 
+It also includes an **AutoFill credential provider extension**, so Pass
+can replace Apple Passwords for filling logins and verification codes in
+Safari and apps on iOS and macOS. The vault lives in the app's App Group
+container; on macOS the CLI and the Chromium native host are bundled
+inside Pass.app and signed with the same team so they open that same file
+— see `pass-apple/README.md`'s "AutoFill" section.
+
 **Unlike every other client in this repo, this one is unverified.** It was
 written in a Linux sandbox with no Xcode, no macOS/iOS SDK, and no way to
 install even the Linux Swift toolchain to compile-check it (outbound

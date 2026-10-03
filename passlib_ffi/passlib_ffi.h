@@ -118,6 +118,16 @@ PassResult vault_sync_pull(CVault *vault, size_t *applied_out);
 bool vault_check_sync_import_available(void);
 PassResult vault_import_from_sync(CVault *vault, size_t *imported_out);
 
+// Vault location. passlib_remember_last_vault records path as the vault the
+// CLI and the Chromium native host should open by default.
+// passlib_relocate_vault moves a vault file (and its pass-syncd state) from
+// `from` to `to` — e.g. into the App Group container the AutoFill extension
+// reads — and remembers `to`; no CVault may be open on `from` meanwhile.
+// Returns PassResultErrorVaultExists if `to` exists, ...ErrorVaultNotFound if
+// `from` doesn't.
+void passlib_remember_last_vault(const char *path);
+PassResult passlib_relocate_vault(const char *from, const char *to);
+
 // The Display message of the most recent error on this thread, or NULL if
 // none has occurred yet (e.g. why a call returned PassResultErrorUnknown).
 // Caller must free the result with string_free.
