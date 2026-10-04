@@ -43,13 +43,6 @@ pass-apple/
 ├── build-xcframework.sh       Run on macOS: builds passlib_ffi for all Apple targets → PassKitFFI.xcframework
 ├── build-macos-app.sh         Run on macOS: builds a runnable .build/Pass.app without an Xcode project
 ├── Sources/PassKit/           Swift wrapper around passlib_ffi.h (Vault, PasswordEntry, errors)
-└── App/                       Shared SwiftUI source for both the macOS and iOS app targets
-    ├── PassApp.swift          @main entry point
-    ├── RootView.swift         Locked ⇄ unlocked switch
-    ├── AppState.swift         ObservableObject driving all vault operations
-    ├── Clipboard.swift        Cross-platform copy-to-clipboard
-    ├── MenuBarContent.swift   macOS status bar icon menu (open window / lock / quit)
-    └── Views/                 Unlock, entry list, entry detail, add/edit form, MFA attach, merge
 ├── Config/                    xcconfigs: App Group + keychain group derived from DEVELOPMENT_TEAM
 ├── Pass/                      The app target (macOS + iOS)
 │   ├── Pass.entitlements      Keychain group, App Group, AutoFill provider
