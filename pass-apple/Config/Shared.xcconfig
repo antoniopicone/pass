@@ -1,0 +1,18 @@
+// Settings shared by the Pass app and its AutoFill extension. Your Team ID
+// is not stored in this repo: everything below derives from
+// DEVELOPMENT_TEAM, which Xcode fills in when you pick a team under
+// Signing & Capabilities (or set it here: DEVELOPMENT_TEAM = ABCDE12345).
+
+PASS_ID_SUFFIX = it.antoniopicone.Pass
+
+// App Group holding the vault, so the AutoFill extension can open it.
+// macOS wants the Team ID prefix (since macOS 15 that's what lets
+// Team-signed helpers — the bundled CLI and Chromium native host — open the
+// container without a consent prompt); iOS requires the "group." prefix.
+PASS_APP_GROUP[sdk=macosx*] = $(DEVELOPMENT_TEAM).$(PASS_ID_SUFFIX)
+PASS_APP_GROUP[sdk=iphoneos*] = group.$(PASS_ID_SUFFIX)
+PASS_APP_GROUP[sdk=iphonesimulator*] = group.$(PASS_ID_SUFFIX)
+
+// Keychain access group holding the biometric-protected master password,
+// shared so the extension can unlock with Face ID / Touch ID too.
+PASS_KEYCHAIN_GROUP = $(DEVELOPMENT_TEAM).$(PASS_ID_SUFFIX)

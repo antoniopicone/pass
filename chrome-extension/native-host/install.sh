@@ -22,10 +22,26 @@ HOST_NAME="com.antoniopicone.pass_native_host"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
-echo "Building pass-native-host (release)…"
-(cd "$REPO_ROOT" && cargo build --release -p pass-native-host)
+# On macOS, prefer the native host bundled inside Pass.app (see
+# pass-apple/Scripts/bundle-helpers.sh): it's signed with the app's team,
+# which is what lets it open the vault in the App Group container shared
+# with the AutoFill extension without a consent prompt. Override the app
+# location with PASS_APP=/path/to/Pass.app.
+PASS_APP="${PASS_APP:-/Applications/Pass.app}"
+BUNDLED_HOST="$PASS_APP/Contents/Helpers/pass-native-host"
 
-BINARY_PATH="$REPO_ROOT/target/release/pass-native-host"
+if [ "$(uname -s)" = "Darwin" ] && [ -x "$BUNDLED_HOST" ]; then
+  echo "Using the native host bundled in $PASS_APP"
+  BINARY_PATH="$BUNDLED_HOST"
+else
+  if [ "$(uname -s)" = "Darwin" ]; then
+    echo "Note: $BUNDLED_HOST not found — building an unbundled native host. It can't open a vault"
+    echo "in Pass's shared container without macOS asking for permission; see pass-apple/README.md."
+  fi
+  echo "Building pass-native-host (release)…"
+  (cd "$REPO_ROOT" && cargo build --release -p pass-native-host)
+  BINARY_PATH="$REPO_ROOT/target/release/pass-native-host"
+fi
 if [ ! -x "$BINARY_PATH" ]; then
   echo "Expected binary not found at $BINARY_PATH" >&2
   exit 1

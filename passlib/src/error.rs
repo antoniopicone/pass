@@ -25,6 +25,9 @@ pub enum PassError {
 
     #[error("TOTP error: {0}")]
     TotpError(String),
+
+    #[error("Import failed: {0}")]
+    ImportError(String),
 }
 
 pub type Result<T> = std::result::Result<T, PassError>;

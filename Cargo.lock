@@ -2382,6 +2382,7 @@ dependencies = [
  "base32",
  "base64 0.22.1",
  "chrono",
+ "csv",
  "hmac 0.13.0",
  "keepass",
  "reqwest",

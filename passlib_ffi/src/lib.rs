@@ -768,6 +768,71 @@ pub unsafe extern "C" fn vault_merge_from_file(
     }
 }
 
+/// Import the logins from an Apple Passwords CSV export (Passwords → File →
+/// Export All Passwords to File…) into the currently open vault and save
+/// the result — see [`passlib::apple_passwords`]. Logins the vault already
+/// has are skipped, so importing the same export twice is harmless.
+/// `*_out` parameters may be NULL if the caller doesn't need that count. A
+/// file that isn't an Apple Passwords export fails with
+/// `PassResult::ErrorUnknown` and a readable `passlib_last_error_message`.
+///
+/// # Safety
+/// - vault must be a valid CVault pointer
+/// - csv_path must be a valid C string
+/// - each non-NULL `*_out` pointer must be a valid `size_t` pointer
+#[no_mangle]
+pub unsafe extern "C" fn vault_import_apple_passwords_csv(
+    vault: *mut CVault,
+    csv_path: *const c_char,
+    imported_out: *mut size_t,
+    already_present_out: *mut size_t,
+    skipped_out: *mut size_t,
+) -> PassResult {
+    if vault.is_null() {
+        return PassResult::ErrorInvalidInput;
+    }
+
+    let cvault = &mut *vault;
+    let vault_ref = match cvault.vault.as_mut() {
+        Some(v) => v,
+        None => return PassResult::ErrorUnknown,
+    };
+
+    let csv_path_str = match from_c_string(csv_path) {
+        Ok(s) => s,
+        Err(e) => return e,
+    };
+
+    match passlib::apple_passwords::import_csv_file(vault_ref, &csv_path_str) {
+        Ok(summary) => {
+            if summary.imported() > 0 {
+                let salt = vault_ref.ensure_sync_salt();
+                if let Err(e) = vault_ref.save(&cvault.master_password) {
+                    set_last_error(&e);
+                    return PassResult::ErrorUnknown;
+                }
+                for id in &summary.imported_ids {
+                    sync_push_upsert(vault_ref, &cvault.master_password, salt, id);
+                }
+            }
+            if !imported_out.is_null() {
+                *imported_out = summary.imported();
+            }
+            if !already_present_out.is_null() {
+                *already_present_out = summary.already_present;
+            }
+            if !skipped_out.is_null() {
+                *skipped_out = summary.skipped_rows;
+            }
+            PassResult::Success
+        }
+        Err(e) => {
+            set_last_error(&e);
+            PassResult::ErrorUnknown
+        }
+    }
+}
+
 /// Pulls and applies any changes `pass-syncd` has for this vault, saving if
 /// anything actually changed. `applied_out` (if non-NULL) receives how many
 /// local entries were added/updated/deleted as a result — the Swift layer
@@ -864,6 +929,51 @@ pub unsafe extern "C" fn vault_import_from_sync(vault: *mut CVault, imported_out
         *imported_out = imported;
     }
     PassResult::Success
+}
+
+/// Records `path` as the last vault used, so the CLI and the Chromium
+/// native host (which open whatever `passlib::propose_vault_path` returns)
+/// follow the vault this app has open. Best-effort, like
+/// [`passlib::remember_last_vault`] itself.
+///
+/// # Safety
+/// - path must be a valid C string
+#[no_mangle]
+pub unsafe extern "C" fn passlib_remember_last_vault(path: *const c_char) {
+    if let Ok(path_str) = from_c_string(path) {
+        passlib::remember_last_vault(std::path::Path::new(&path_str));
+    }
+}
+
+/// Moves the vault file at `from` (and its pass-syncd state) to `to` and
+/// remembers `to` as the last vault — see [`passlib::relocate_vault`].
+/// No `CVault` may be open on `from` while this runs. Fails with
+/// `ErrorVaultExists` if `to` already exists, `ErrorVaultNotFound` if
+/// `from` doesn't.
+///
+/// # Safety
+/// - from and to must be valid C strings
+#[no_mangle]
+pub unsafe extern "C" fn passlib_relocate_vault(from: *const c_char, to: *const c_char) -> PassResult {
+    let from_str = match from_c_string(from) {
+        Ok(s) => s,
+        Err(e) => return e,
+    };
+    let to_str = match from_c_string(to) {
+        Ok(s) => s,
+        Err(e) => return e,
+    };
+    if std::path::Path::new(&to_str).exists() {
+        return PassResult::ErrorVaultExists;
+    }
+    match passlib::relocate_vault(std::path::Path::new(&from_str), std::path::Path::new(&to_str)) {
+        Ok(()) => PassResult::Success,
+        Err(PassError::VaultNotFound(_)) => PassResult::ErrorVaultNotFound,
+        Err(e) => {
+            set_last_error(&e);
+            PassResult::ErrorUnknown
+        }
+    }
 }
 
 /// Free a vault instance

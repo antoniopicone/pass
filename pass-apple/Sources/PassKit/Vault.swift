@@ -199,6 +199,47 @@ public final class Vault: @unchecked Sendable {
         )
     }
 
+    /// Import the logins from an Apple Passwords CSV export (Passwords →
+    /// File → Export All Passwords to File…) and persist the vault. Logins
+    /// the vault already has are skipped, so importing the same export
+    /// twice is harmless. The CSV itself is left untouched — deleting it
+    /// is up to the caller.
+    public func importApplePasswords(fromCSV csvPath: String) throws -> AppleImportSummary {
+        var imported: size_t = 0
+        var alreadyPresent: size_t = 0
+        var skipped: size_t = 0
+
+        let result = csvPath.withCString { pathPtr in
+            vault_import_apple_passwords_csv(handle, pathPtr, &imported, &alreadyPresent, &skipped)
+        }
+        try check(result)
+
+        return AppleImportSummary(
+            imported: Int(imported),
+            alreadyPresent: Int(alreadyPresent),
+            skipped: Int(skipped)
+        )
+    }
+
+    /// Records `path` as the vault the CLI and the Chromium native host
+    /// open by default (`~/.config/pass/last-vault`), so they follow the
+    /// vault this app uses. Best-effort.
+    public static func rememberAsLastVault(path: String) {
+        path.withCString { passlib_remember_last_vault($0) }
+    }
+
+    /// Moves the vault file at `from` (and its pass-syncd state) to `to`,
+    /// e.g. into the App Group container, and remembers `to` as the last
+    /// vault. No `Vault` may be open on `from` meanwhile — it would keep
+    /// saving to the old path. Throws `PassError.vaultExists` if `to`
+    /// already exists.
+    public static func relocate(from: String, to: String) throws {
+        let result = withCStrings([from, to]) { ptrs in
+            passlib_relocate_vault(ptrs[0], ptrs[1])
+        }
+        try check(result)
+    }
+
     /// Whether `pass-syncd` already knows of an existing synced vault on
     /// this network (some other device set one up first) — no vault needs
     /// to be open yet to check, since this is meant to be called right

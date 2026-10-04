@@ -184,7 +184,7 @@ struct SyncState {
     last_fingerprint: String,
 }
 
-fn state_path(vault_path: &Path) -> PathBuf {
+pub(crate) fn state_path(vault_path: &Path) -> PathBuf {
     let mut s = vault_path.as_os_str().to_os_string();
     s.push(".sync-state.json");
     PathBuf::from(s)

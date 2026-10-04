@@ -90,6 +90,12 @@ impl Vault {
             )));
         }
 
+        // The default location may not exist yet: `~/.vaults/`, or on macOS
+        // the App Group container when Pass.app hasn't run yet.
+        if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+            fs::create_dir_all(parent)?;
+        }
+
         let mut db = Database::new();
         strengthen_kdf(&mut db);
 
@@ -585,6 +591,15 @@ mod tests {
 
         let vault = Vault::unlock(&path, master_password).unwrap();
         assert_eq!(vault.len(), 0);
+    }
+
+    #[test]
+    fn test_init_creates_missing_parent_directories() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("Group Containers").join("X.it.antoniopicone.Pass").join("personal.kdbx");
+
+        Vault::init(&path, "pw").unwrap();
+        assert!(path.exists());
     }
 
     #[test]

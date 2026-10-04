@@ -154,6 +154,24 @@ pass update <entry-id>
 pass delete <entry-id>
 ```
 
+### Import from Apple Passwords (macOS)
+
+```bash
+pass import-apple                 # opens Passwords and walks you through the export
+pass import-apple ~/Passwords.csv # or point it at an export you already have
+```
+
+Apple doesn't let other apps read iCloud Keychain, so — like
+[iCloudBridge](https://github.com/keithvassallomt/icloudbridge) — this
+imports the CSV the Passwords app exports (**File → Export All Passwords
+to File…**; Safari's **File → Export → Passwords…** before macOS 15).
+A login saved for several sites becomes one entry with additional URLs,
+verification codes come along as MFA/TOTP secrets, and logins the vault
+already has are skipped, so re-importing a newer export only adds what's
+new. Afterwards it offers to delete the CSV, which holds every password in
+plain text (`--keep-file` skips the question). The command only exists in
+macOS builds of `pass`.
+
 ### Vault Location
 
 ```bash
@@ -327,8 +345,15 @@ share the same keyring entry and PAM service.
 `pass-apple/` has a shared SwiftUI app (unlock/create, search, view/reveal/
 copy password and MFA code with a live countdown, add/edit/delete, attach
 MFA via `otpauth://` URI or a QR photo scanned with Vision, import another
-vault file) for both platforms, backed by `passlib_ffi` — including a
+vault file, import from Apple Passwords' CSV export) for both platforms, backed by `passlib_ffi` — including a
 background sync pull every few seconds while unlocked, same as `pass-gnome`.
+
+It also includes an **AutoFill credential provider extension**, so Pass
+can replace Apple Passwords for filling logins and verification codes in
+Safari and apps on iOS and macOS. The vault lives in the app's App Group
+container; on macOS the CLI and the Chromium native host are bundled
+inside Pass.app and signed with the same team so they open that same file
+— see `pass-apple/README.md`'s "AutoFill" section.
 
 **Unlike every other client in this repo, this one is unverified.** It was
 written in a Linux sandbox with no Xcode, no macOS/iOS SDK, and no way to
@@ -344,10 +369,11 @@ The project is organized as a Rust workspace with these packages:
 
 - **`passlib`**: Core library — KDBX4 vault storage (via the `keepass`
   crate), the real-time sync client (`SyncHandle`, talking to `pass-syncd`),
-  one-off KDBX import merge, and TOTP/MFA code generation
+  one-off KDBX import merge, Apple Passwords CSV import, and TOTP/MFA code
+  generation
 - **`passcli`**: Command-line interface application
 - **`passlib_ffi`**: C-compatible FFI bindings — init/unlock/CRUD, sync,
-  merge, and MFA/TOTP — used by `pass-apple`'s Swift wrapper
+  merge, Apple Passwords import, and MFA/TOTP — used by `pass-apple`'s Swift wrapper
 - **`pass-native-host`**: Native messaging host bridging the Chromium
   extension to `passlib`
 - **`pass-gnome`**: Native GTK4/libadwaita desktop app for Linux
@@ -368,6 +394,7 @@ passlib/
 │   ├── sync.rs     # Real-time sync client (SyncHandle) talking to pass-syncd
 │   ├── entry.rs    # Password entry data structures
 │   ├── totp.rs     # RFC 6238 TOTP + otpauth:// URI (de)serialization
+│   ├── apple_passwords.rs # Import from Apple Passwords' CSV export
 │   └── error.rs    # Error types
 └── Cargo.toml
 ```
