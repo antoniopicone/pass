@@ -85,10 +85,22 @@ PassResult vault_merge_from_file(CVault *vault, const char *other_path,
                                  size_t *created_out, size_t *updated_out,
                                  size_t *unchanged_out, size_t *deleted_out);
 
+// Import from Apple Passwords (iCloud Keychain): reads the CSV the Passwords
+// app exports (File → Export All Passwords to File…), adds every login the
+// vault doesn't already have and saves. imported_out / already_present_out /
+// skipped_out (rows without a password) may each be NULL. A file that isn't
+// an Apple Passwords export returns PassResultErrorUnknown with a readable
+// passlib_last_error_message().
+PassResult vault_import_apple_passwords_csv(CVault *vault, const char *csv_path,
+                                            size_t *imported_out,
+                                            size_t *already_present_out,
+                                            size_t *skipped_out);
+
 // Real-time cross-device sync via the local pass-syncd daemon (see
 // pass-syncd/README.md and passlib/src/sync.rs). Every vault_add_entry /
 // vault_update_entry / vault_delete_entry / vault_set_entry_totp_uri /
-// vault_clear_entry_totp / vault_merge_from_file call above already pushes
+// vault_clear_entry_totp / vault_merge_from_file /
+// vault_import_apple_passwords_csv call above already pushes
 // its own change automatically — this is the only call needed to pull
 // other devices' changes in. Always returns PassResultSuccess unless the
 // vault itself is invalid, whether or not pass-syncd is actually reachable

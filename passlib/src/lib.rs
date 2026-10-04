@@ -36,6 +36,7 @@
 //! let entries = vault.list_entries().unwrap();
 //! ```
 
+pub mod apple_passwords;
 pub mod entry;
 pub mod error;
 pub mod recent;
@@ -44,6 +45,7 @@ pub mod totp;
 pub mod vault;
 
 // Re-export main types
+pub use apple_passwords::AppleImportSummary;
 pub use entry::{PasswordEntry, PasswordEntrySummary};
 pub use error::{PassError, Result};
 pub use recent::{default_vault_path, propose_vault_path, remember_last_vault};
