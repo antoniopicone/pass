@@ -221,6 +221,25 @@ public final class Vault: @unchecked Sendable {
         )
     }
 
+    /// Records `path` as the vault the CLI and the Chromium native host
+    /// open by default (`~/.config/pass/last-vault`), so they follow the
+    /// vault this app uses. Best-effort.
+    public static func rememberAsLastVault(path: String) {
+        path.withCString { passlib_remember_last_vault($0) }
+    }
+
+    /// Moves the vault file at `from` (and its pass-syncd state) to `to`,
+    /// e.g. into the App Group container, and remembers `to` as the last
+    /// vault. No `Vault` may be open on `from` meanwhile — it would keep
+    /// saving to the old path. Throws `PassError.vaultExists` if `to`
+    /// already exists.
+    public static func relocate(from: String, to: String) throws {
+        let result = withCStrings([from, to]) { ptrs in
+            passlib_relocate_vault(ptrs[0], ptrs[1])
+        }
+        try check(result)
+    }
+
     /// Whether `pass-syncd` already knows of an existing synced vault on
     /// this network (some other device set one up first) — no vault needs
     /// to be open yet to check, since this is meant to be called right

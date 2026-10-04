@@ -1,0 +1,8 @@
+// Base configuration for the AutoFill credential provider extension
+// targets (one for macOS, one for iOS, sharing the AutoFill/ sources).
+#include "Shared.xcconfig"
+
+CODE_SIGN_ENTITLEMENTS[sdk=macosx*] = AutoFill/AutoFill-macOS.entitlements
+CODE_SIGN_ENTITLEMENTS[sdk=iphoneos*] = AutoFill/AutoFill-iOS.entitlements
+CODE_SIGN_ENTITLEMENTS[sdk=iphonesimulator*] = AutoFill/AutoFill-iOS.entitlements
+INFOPLIST_FILE = AutoFill/Info.plist

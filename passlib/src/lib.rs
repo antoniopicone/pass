@@ -48,7 +48,9 @@ pub mod vault;
 pub use apple_passwords::AppleImportSummary;
 pub use entry::{PasswordEntry, PasswordEntrySummary};
 pub use error::{PassError, Result};
-pub use recent::{default_vault_path, propose_vault_path, remember_last_vault};
+pub use recent::{
+    app_group_container, app_group_id, default_vault_path, propose_vault_path, relocate_vault, remember_last_vault,
+};
 pub use sync::SyncHandle;
 pub use totp::{TotpAlgorithm, TotpConfig};
 pub use vault::{MergeSummary, Vault};

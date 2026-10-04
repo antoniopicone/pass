@@ -11,6 +11,11 @@ import Security
 /// guards *locally retrieving* that password using the device's existing
 /// biometric enrollment, the same pattern system apps like Mail/Notes use
 /// for "Unlock with Face ID".
+///
+/// Shared with the AutoFill extension (this file lives in `Shared/`, part of
+/// both targets): items go into the keychain access group from
+/// `SharedConfig.keychainAccessGroup`, so enabling Face ID/Touch ID in the
+/// app also lets the extension unlock the vault without typing.
 enum BiometricUnlock {
     private static let service = "it.antoniopicone.Pass.vault-password"
 
@@ -109,7 +114,7 @@ enum BiometricUnlock {
     }
 
     private static func baseQuery(forVaultPath path: String) -> [String: Any] {
-        [
+        var query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: path,
@@ -120,6 +125,13 @@ enum BiometricUnlock {
             // so this is a no-op there.
             kSecUseDataProtectionKeychain as String: true,
         ]
+        // Same group the app has always written to by default (the first
+        // `keychain-access-groups` entry), now named explicitly so the
+        // AutoFill extension reads the very same item.
+        if let group = SharedConfig.keychainAccessGroup {
+            query[kSecAttrAccessGroup as String] = group
+        }
+        return query
     }
 
     enum BiometricError: Error, LocalizedError {

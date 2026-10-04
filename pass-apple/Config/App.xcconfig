@@ -1,0 +1,13 @@
+// Base configuration for the Pass app target (macOS and iOS). Paths are
+// relative to the Xcode project, which is expected to live in pass-apple/.
+#include "Shared.xcconfig"
+
+CODE_SIGN_ENTITLEMENTS = Pass/Pass.entitlements
+// Merged with Xcode's generated Info.plist: only adds the App Group and
+// keychain group names for the Swift code to read at run time.
+INFOPLIST_FILE = Pass/Info.plist
+
+// Scripts/bundle-helpers.sh (macOS Run Script phase) builds the CLI and the
+// Chromium native host from the Rust workspace one level up, outside what a
+// sandboxed build script may read.
+ENABLE_USER_SCRIPT_SANDBOXING = NO

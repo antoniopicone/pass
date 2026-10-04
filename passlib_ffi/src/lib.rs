@@ -931,6 +931,51 @@ pub unsafe extern "C" fn vault_import_from_sync(vault: *mut CVault, imported_out
     PassResult::Success
 }
 
+/// Records `path` as the last vault used, so the CLI and the Chromium
+/// native host (which open whatever `passlib::propose_vault_path` returns)
+/// follow the vault this app has open. Best-effort, like
+/// [`passlib::remember_last_vault`] itself.
+///
+/// # Safety
+/// - path must be a valid C string
+#[no_mangle]
+pub unsafe extern "C" fn passlib_remember_last_vault(path: *const c_char) {
+    if let Ok(path_str) = from_c_string(path) {
+        passlib::remember_last_vault(std::path::Path::new(&path_str));
+    }
+}
+
+/// Moves the vault file at `from` (and its pass-syncd state) to `to` and
+/// remembers `to` as the last vault — see [`passlib::relocate_vault`].
+/// No `CVault` may be open on `from` while this runs. Fails with
+/// `ErrorVaultExists` if `to` already exists, `ErrorVaultNotFound` if
+/// `from` doesn't.
+///
+/// # Safety
+/// - from and to must be valid C strings
+#[no_mangle]
+pub unsafe extern "C" fn passlib_relocate_vault(from: *const c_char, to: *const c_char) -> PassResult {
+    let from_str = match from_c_string(from) {
+        Ok(s) => s,
+        Err(e) => return e,
+    };
+    let to_str = match from_c_string(to) {
+        Ok(s) => s,
+        Err(e) => return e,
+    };
+    if std::path::Path::new(&to_str).exists() {
+        return PassResult::ErrorVaultExists;
+    }
+    match passlib::relocate_vault(std::path::Path::new(&from_str), std::path::Path::new(&to_str)) {
+        Ok(()) => PassResult::Success,
+        Err(PassError::VaultNotFound(_)) => PassResult::ErrorVaultNotFound,
+        Err(e) => {
+            set_last_error(&e);
+            PassResult::ErrorUnknown
+        }
+    }
+}
+
 /// Free a vault instance
 ///
 /// # Safety

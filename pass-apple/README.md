@@ -3,7 +3,9 @@
 A shared SwiftUI app (unlock/create vault, search, view/reveal/copy
 password and MFA code with a live countdown, add/edit/delete, attach MFA
 via `otpauth://` URI or a QR code photo, import another vault file,
-import from Apple Passwords' CSV export) backed
+import from Apple Passwords' CSV export), plus an **AutoFill credential
+provider extension** so Pass can replace Apple Passwords for filling
+logins and verification codes system-wide — all backed
 by `passlib_ffi` — the same Rust core `pass`, `pass-gnome`, and the
 Chromium extension use, opening the same real KDBX4/KeePassXC-compatible
 `.kdbx` files. Every mutation pushes to the local
@@ -48,6 +50,22 @@ pass-apple/
     ├── Clipboard.swift        Cross-platform copy-to-clipboard
     ├── MenuBarContent.swift   macOS status bar icon menu (open window / lock / quit)
     └── Views/                 Unlock, entry list, entry detail, add/edit form, MFA attach, merge
+├── Config/                    xcconfigs: App Group + keychain group derived from DEVELOPMENT_TEAM
+├── Pass/                      The app target (macOS + iOS)
+│   ├── Pass.entitlements      Keychain group, App Group, AutoFill provider
+│   ├── Info.plist             Adds the App Group/keychain group names (merged with Xcode's)
+│   └── App/                   SwiftUI source: PassApp, RootView, AppState, Clipboard, Views/
+├── AutoFill/                  The AutoFill credential provider extension (one target per platform)
+│   ├── CredentialProviderViewController.swift  What the system calls
+│   ├── AutoFillModel.swift / AutoFillView.swift  Unlock + pick a login or verification code
+│   ├── Info.plist             NSExtension: ProvidesPasswords, ProvidesOneTimeCodes
+│   └── AutoFill-{macOS,iOS}.entitlements
+├── Shared/                    Compiled into the app AND the extension
+│   ├── SharedConfig.swift     App Group container, shared defaults, vault path
+│   ├── BiometricUnlock.swift  Face ID/Touch ID master password, in the shared keychain group
+│   ├── CredentialIdentities.swift  Feeds the system's AutoFill suggestions (no secrets)
+│   └── SiteMatcher.swift      Entry ⇄ website host matching
+└── Scripts/bundle-helpers.sh  macOS build phase: CLI + Chromium native host into Pass.app, team-signed
 ```
 
 ## Quick macOS build (no Xcode project)
@@ -91,32 +109,103 @@ below for a properly signed app, and for iOS.
      which is exactly the `App/` layout here).
    - Product name `Pass`, interface **SwiftUI**.
    - Delete the template's generated `ContentView.swift` and `PassApp.swift`.
-   - Drag this directory's `App/` folder (all of it, including `Views/`)
-     into the project, for both targets.
+   - Drag `Pass/App/` (all of it, including `Views/`) and `Shared/` into
+     the project, for both targets; delete the template's own
+     entitlements file (`Config/App.xcconfig` points at
+     `Pass/Pass.entitlements` instead).
    - File → Add Package Dependencies → **Add Local...** → select this
      `pass-apple/` directory (the one with `Package.swift`) → add the
      `PassKit` product to both the macOS and iOS targets.
 
-3. **macOS entitlements.** If the macOS target has App Sandbox enabled
-   (Xcode's default for new Mac targets), add the
-   *"App Sandbox → File Access → User Selected File → Read/Write"*
-   entitlement, or the vault-path file picker won't be able to read/write
-   arbitrary paths. Simplest alternative for a first build: turn App
-   Sandbox off for this personal-use app.
+3. **Base configurations and signing.** In the project's Info tab, set
+   the app target's configurations to `Config/App.xcconfig` (save the
+   project inside `pass-apple/`, since the xcconfigs use paths relative to
+   it). Pick your team under *Signing & Capabilities*: everything that
+   needs a Team ID — the App Group (`TEAMID.it.antoniopicone.Pass` on
+   macOS, `group.it.antoniopicone.Pass` on iOS, which requires that
+   prefix) and the keychain group (`TEAMID.it.antoniopicone.Pass`) — is
+   derived from `DEVELOPMENT_TEAM`, so no Team ID lives in this repo. If
+   automatic signing complains that the App Group isn't registered, add
+   it under *Signing & Capabilities → App Groups* with that same value.
 
-4. **iOS Photos permission.** The MFA QR-photo scanner uses `PhotosPicker`,
+4. **AutoFill extension targets.** File → New → Target → **AutoFill
+   Credential Provider Extension**, once for macOS and once for iOS
+   (bundle IDs e.g. `it.antoniopicone.Pass.AutoFill`, embedded in the
+   matching app). For each:
+   - Delete the template's generated Swift file, storyboard and
+     Info.plist; add this directory's `AutoFill/` and `Shared/` folders
+     (add `Shared/` to the app targets too) and the `PassKit` package
+     product.
+   - Set its configurations to `Config/AutoFill.xcconfig`, which points at
+     `AutoFill/Info.plist` and the right `AutoFill-*.entitlements` per
+     platform (the macOS extension must be sandboxed; it reads the vault
+     only through the App Group).
+
+5. **Bundle the CLI and the Chromium native host (macOS).** In the macOS
+   app target's Build Phases add a *Run Script* phase running
+   `"${SRCROOT}/Scripts/bundle-helpers.sh"`. It builds `pass` and
+   `pass-native-host` for the architectures being built, copies them into
+   `Pass.app/Contents/Helpers/` and signs them with the app's identity and
+   App Group (`ENABLE_USER_SCRIPT_SANDBOXING = NO` is already in
+   `App.xcconfig` so it can read the Rust workspace). Then:
+
+   ```bash
+   chrome-extension/native-host/install.sh <extension-id>   # picks /Applications/Pass.app's helper
+   sudo ln -sf /Applications/Pass.app/Contents/Helpers/pass /usr/local/bin/pass   # optional
+   ```
+
+6. **macOS App Sandbox stays off for the app** (`Pass/Pass.entitlements`
+   doesn't enable it): the app must still be able to open a vault picked
+   anywhere on disk and move it into the App Group container. Only the
+   AutoFill extension is sandboxed.
+
+7. **iOS Photos permission.** The MFA QR-photo scanner uses `PhotosPicker`,
    which does not need `NSPhotoLibraryUsageDescription` (it runs out of
    process), so no Info.plist entry should be required — but if Xcode
    complains, add that key with a short description.
 
-5. Build and run. Report back what broke — it's genuinely useful signal
+8. Build and run. Report back what broke — it's genuinely useful signal
    for this repo, since it's the only client that's shipped without a
    compiler having looked at it first.
+
+## AutoFill: using Pass instead of Apple Passwords
+
+Once the app runs, turn Pass on in *Settings → General → AutoFill &
+Passwords* (iOS) or *System Settings → General → AutoFill & Passwords*
+(macOS 15+), and turn Passwords off there if you want Pass to be the only
+one.
+
+- **What it fills:** logins (suggested above the keyboard / under the
+  field, and the full searchable list) and, from iOS 18 / macOS 15, TOTP
+  verification codes in one-time-code fields.
+- **Unlocking:** the extension opens the vault with the master password
+  kept behind Face ID/Touch ID — the same keychain item the app stores
+  when you enable biometric unlock, shared through the keychain group — or
+  with the typed master password.
+- **Suggestions without unlocking:** after every change the app (and the
+  extension, whenever it unlocks) refreshes `ASCredentialIdentityStore`
+  with site, username and entry ID only — never passwords or TOTP secrets.
+- **Where the vault must be:** in the App Group container, the only place
+  the sandboxed extension can read. New vaults go there by default; an
+  existing one can be moved from *Settings → Move Vault to Shared
+  Container*, which also points the CLI and the Chromium native host at it
+  (`~/.config/pass/last-vault`).
+- **Chrome on macOS:** Chrome doesn't use AutoFill providers for
+  passwords, so the Chromium extension stays. Its native host, bundled and
+  team-signed inside Pass.app, opens the vault in the App Group container
+  directly. An unbundled `cargo build` of it (or of the CLI) still works,
+  but macOS 15+ may ask for permission to access another app's data, and
+  that consent only lasts while the process runs.
+- **Not covered yet:** saving new passwords from Safari's sign-up forms
+  (Apple only offers that to providers from iOS 26.2, `ASSavePasswordRequest`),
+  passkeys, and importing through Credential Exchange (iOS/macOS 26) —
+  the CSV import covers that for now.
 
 ## Design notes
 
 - **Same vault, same format.** `AppState`'s default vault path is
-  `Documents/passwords.kdbx` (both platforms) — a real KDBX4 file, openable
+  `personal.kdbx` in the App Group container (both platforms; Documents
+  if the build has no team) — a real KDBX4 file, openable
   by `pass`, `pass-gnome`, and KeePassXC itself. See the main README's
   "KDBX4 / KeePassXC compatibility" section for the field mapping.
 - **No custom merge logic here either.** `Vault.merge(fromFile:)` calls
