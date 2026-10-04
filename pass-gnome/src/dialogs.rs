@@ -50,6 +50,30 @@ pub fn show_edit_dialog(
     let username_row = adw::EntryRow::builder().title("Username / Email").build();
     let password_row = adw::PasswordEntryRow::builder().title("Password").build();
 
+    // Notes: a plain `TextView`, not another `adw::EntryRow` in `list` —
+    // notes are free-form and often multi-line (matches the Chromium
+    // extension's `<textarea>` for the same field), which an EntryRow
+    // (single-line by design) can't show properly.
+    let notes_label = gtk::Label::new(Some("Notes"));
+    notes_label.set_halign(gtk::Align::Start);
+    notes_label.add_css_class("dim-label");
+    notes_label.set_margin_start(12);
+    notes_label.set_margin_top(6);
+
+    let notes_buffer = gtk::TextBuffer::new(None);
+    let notes_view = gtk::TextView::builder()
+        .buffer(&notes_buffer)
+        .wrap_mode(gtk::WrapMode::WordChar)
+        .top_margin(6)
+        .bottom_margin(6)
+        .left_margin(6)
+        .right_margin(6)
+        .build();
+    let notes_frame = gtk::Frame::new(None);
+    notes_frame.set_child(Some(&gtk::ScrolledWindow::builder().min_content_height(80).child(&notes_view).build()));
+    notes_frame.set_margin_start(12);
+    notes_frame.set_margin_end(12);
+
     if let Some(id) = &existing_id {
         let s = state.borrow();
         if let Some(unlocked) = s.unlocked.as_ref() {
@@ -58,6 +82,7 @@ pub fn show_edit_dialog(
                 url_row.set_text(&entry.url);
                 username_row.set_text(&entry.username);
                 password_row.set_text(entry.password());
+                notes_buffer.set_text(&entry.notes);
             }
         }
     } else {
@@ -83,6 +108,8 @@ pub fn show_edit_dialog(
 
     let content = gtk::Box::new(gtk::Orientation::Vertical, 6);
     content.append(&list);
+    content.append(&notes_label);
+    content.append(&notes_frame);
     content.append(&status);
     content.append(&save_btn);
     toolbar.set_content(Some(&content));
@@ -97,6 +124,7 @@ pub fn show_edit_dialog(
             let url = url_row.text().to_string();
             let username = username_row.text().to_string();
             let password = password_row.text().to_string();
+            let notes = notes_buffer.text(&notes_buffer.start_iter(), &notes_buffer.end_iter(), false).to_string();
 
             if website.trim().is_empty() {
                 status.set_text("Website is required.");
@@ -109,10 +137,11 @@ pub fn show_edit_dialog(
             let result = match &existing_id {
                 Some(id) => unlocked
                     .vault
-                    .update_entry(id, Some(website), Some(url), Some(username), Some(password), None, None)
+                    .update_entry(id, Some(website), Some(url), Some(username), Some(password), Some(notes), None)
                     .map(|_| id.clone()),
                 None => {
-                    let entry = passlib::PasswordEntry::new(website, url, username, password);
+                    let mut entry = passlib::PasswordEntry::new(website, url, username, password);
+                    entry.notes = notes;
                     unlocked.vault.add_entry(entry)
                 }
             };
@@ -147,7 +176,7 @@ pub fn show_edit_dialog(
 /// View an entry: password reveal, TOTP code with a live countdown, copy
 /// buttons, and entry points into edit/delete/attach-MFA.
 pub fn show_detail_dialog(state: Rc<RefCell<AppState>>, ui: Ui, parent: gtk::Window, entry_id: String) {
-    let (website, url, username, password, has_totp) = {
+    let (website, url, username, password, notes, has_totp) = {
         let s = state.borrow();
         let Some(unlocked) = s.unlocked.as_ref() else { return };
         let Ok(entry) = unlocked.vault.get_entry(&entry_id) else { return };
@@ -156,6 +185,7 @@ pub fn show_detail_dialog(state: Rc<RefCell<AppState>>, ui: Ui, parent: gtk::Win
             entry.url.clone(),
             entry.username.clone(),
             entry.password().to_string(),
+            entry.notes.clone(),
             entry.totp.is_some(),
         )
     };
@@ -226,6 +256,30 @@ pub fn show_detail_dialog(state: Rc<RefCell<AppState>>, ui: Ui, parent: gtk::Win
 
     let outer = gtk::Box::new(gtk::Orientation::Vertical, 0);
     outer.append(&list);
+
+    if !notes.is_empty() {
+        let notes_label = gtk::Label::new(Some("Notes"));
+        notes_label.set_halign(gtk::Align::Start);
+        notes_label.add_css_class("dim-label");
+        notes_label.set_margin_top(12);
+        notes_label.set_margin_start(12);
+        outer.append(&notes_label);
+
+        let notes_value = gtk::Label::new(Some(&notes));
+        notes_value.set_wrap(true);
+        notes_value.set_xalign(0.0);
+        notes_value.set_selectable(true);
+        notes_value.set_margin_top(4);
+        notes_value.set_margin_start(12);
+        notes_value.set_margin_end(12);
+        notes_value.set_margin_bottom(4);
+        let notes_frame = gtk::Frame::new(None);
+        notes_frame.set_child(Some(&notes_value));
+        notes_frame.set_margin_start(12);
+        notes_frame.set_margin_end(12);
+        outer.append(&notes_frame);
+    }
+
     outer.append(&totp_list);
 
     let totp_source: Rc<RefCell<Option<glib::SourceId>>> = Rc::new(RefCell::new(None));

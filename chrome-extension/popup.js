@@ -55,6 +55,10 @@ const els = {
   initBtn: document.getElementById("init-btn"),
   importFromSyncRow: document.getElementById("import-from-sync-row"),
   importFromSync: document.getElementById("import-from-sync"),
+  howdyUnlockBtn: document.getElementById("howdy-unlock-btn"),
+  howdyEnrollBanner: document.getElementById("howdy-enroll-banner"),
+  howdyEnrollBtn: document.getElementById("howdy-enroll-btn"),
+  howdyEnrollDismissBtn: document.getElementById("howdy-enroll-dismiss-btn"),
   lockBtn: document.getElementById("lock-btn"),
   status: document.getElementById("status"),
   search: document.getElementById("search"),
@@ -132,9 +136,24 @@ async function init() {
     els.vaultPath.value = state.vaultPath;
     showList();
   } else {
-    els.vaultPath.value = "passwords.kdbx";
     showView("locked-view");
+    await prefillDefaultVaultPath();
     checkSyncImportAvailable();
+    checkHowdyUnlockAvailable();
+  }
+}
+
+/** Prefills the vault-path field with the last vault successfully
+ *  unlocked/created by *any* pass client (CLI, GNOME, or this extension),
+ *  or ~/.vaults/personal.kdbx if there isn't one yet — see
+ *  passlib::propose_vault_path. Leaves the field untouched (rather than
+ *  clearing it) if the native host is missing/unreachable. */
+async function prefillDefaultVaultPath() {
+  try {
+    const { vaultPath } = await sendToBackground("PASS_GET_DEFAULT_VAULT_PATH");
+    if (vaultPath) els.vaultPath.value = vaultPath;
+  } catch {
+    /* leave whatever was already there */
   }
 }
 
@@ -148,6 +167,35 @@ async function checkSyncImportAvailable() {
     els.importFromSyncRow.hidden = !available;
   } catch {
     els.importFromSyncRow.hidden = true;
+  }
+}
+
+/** Shows the "Unlock with your face" button on the locked screen only
+ *  when howdy is installed, its PAM service is configured, and this exact
+ *  vault has already opted in (see pass-howdy) — degrades silently
+ *  otherwise, same as the sync-import checkbox above. */
+async function checkHowdyUnlockAvailable() {
+  const vaultPath = els.vaultPath.value.trim();
+  if (!vaultPath) {
+    els.howdyUnlockBtn.hidden = true;
+    return;
+  }
+  try {
+    const { canUnlock } = await sendToBackground("PASS_HOWDY_STATUS", { vaultPath });
+    els.howdyUnlockBtn.hidden = !canUnlock;
+  } catch {
+    els.howdyUnlockBtn.hidden = true;
+  }
+}
+
+/** Right after a successful *manual* unlock: offers enabling face unlock
+ *  if howdy is available but this vault hasn't opted in yet. */
+async function offerHowdyEnrollmentIfAvailable() {
+  try {
+    const { canEnroll } = await sendToBackground("PASS_HOWDY_STATUS", { vaultPath: state.vaultPath });
+    els.howdyEnrollBanner.hidden = !canEnroll;
+  } catch {
+    els.howdyEnrollBanner.hidden = true;
   }
 }
 
@@ -350,6 +398,19 @@ els.unlockBtn.addEventListener("click", async () => {
     els.masterPassword.value = "";
     setStatus("");
     showList();
+    offerHowdyEnrollmentIfAvailable();
+  } catch (e) {
+    setStatus(e.message, true);
+  }
+});
+
+els.howdyUnlockBtn.addEventListener("click", async () => {
+  const vaultPath = els.vaultPath.value.trim();
+  setStatus(t("status_unlocking"));
+  try {
+    state = await sendToBackground("PASS_HOWDY_UNLOCK", { vaultPath });
+    setStatus("");
+    showList();
   } catch (e) {
     setStatus(e.message, true);
   }
@@ -394,8 +455,25 @@ els.lockBtn.addEventListener("click", async () => {
   await sendToBackground("PASS_LOCK");
   state = { isUnlocked: false, entries: [] };
   els.masterPassword.value = "";
+  els.howdyEnrollBanner.hidden = true;
   setStatus("");
   showView("locked-view");
+  checkSyncImportAvailable();
+  checkHowdyUnlockAvailable();
+});
+
+els.howdyEnrollBtn.addEventListener("click", async () => {
+  els.howdyEnrollBanner.hidden = true;
+  try {
+    await sendToBackground("PASS_HOWDY_ENROLL");
+    setStatus(t("status_face_unlock_enabled"));
+  } catch (e) {
+    setStatus(e.message, true);
+  }
+});
+
+els.howdyEnrollDismissBtn.addEventListener("click", () => {
+  els.howdyEnrollBanner.hidden = true;
 });
 
 els.search.addEventListener("input", renderList);

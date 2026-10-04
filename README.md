@@ -33,19 +33,26 @@ binary (see "KDBX4 / KeePassXC compatibility" below).
 
 ## 🚀 Installation
 
-### From Source
+### Everything at once
 
 ```bash
-# Clone the repository
 git clone https://github.com/antoniopicone/pass.git
 cd pass
+./install.sh                        # CLI + pass-syncd + the native GUI app
+./install.sh --extension-id ID      # ...and the Chromium native messaging host
+./install.sh --with-howdy           # ...and "unlock with your face" (needs sudo — see pass-howdy/)
+```
 
-# Build the release binary
+Detects the OS and installs what makes sense there (see `./install.sh --help`);
+each piece also has its own narrower install script if you'd rather do
+just one (`pass-syncd/service/`, `chrome-extension/native-host/`,
+`pass-howdy/setup-pam-service.sh`).
+
+### Just the CLI, from source
+
+```bash
 cargo build --release
-
 # The binary will be at: ./target/release/pass
-
-# Optional: Install to system
 cargo install --path passcli
 ```
 
@@ -147,12 +154,20 @@ pass update <entry-id>
 pass delete <entry-id>
 ```
 
-### Custom Vault Location
+### Vault Location
 
 ```bash
 # Use a different vault file
 pass --vault /path/to/my-vault.kdbx list
 ```
+
+Without `--vault`, `pass` proposes the last vault you successfully
+unlocked or created (remembered across every client — the CLI, the GNOME
+app, and the Chromium extension all share this, at
+`~/.config/pass/last-vault`), or `~/.vaults/personal.kdbx` if there isn't
+one yet. This replaced a fixed `passwords.kdbx` relative to wherever the
+command happened to be run from — if you relied on that, pass `--vault
+passwords.kdbx` explicitly (or move it to the new default path).
 
 ## 🗄️ KDBX4 / KeePassXC compatibility
 
@@ -256,7 +271,9 @@ searches/copies/autofills entries, and can trigger a one-off KDBX import
 from its popup. It talks to the vault through a small native messaging host
 (`pass-native-host`) rather than over the network — that host already pulls
 and pushes to `pass-syncd` on every action, so the extension gets real-time
-sync automatically. See `chrome-extension/README.md` for setup.
+sync automatically. On Linux, it also offers "unlock with your face" (see
+[🙂 Face unlock](#-face-unlock-linux) below) once enabled. See
+`chrome-extension/README.md` for setup.
 
 ## 🐧 GNOME app
 
@@ -264,16 +281,46 @@ sync automatically. See `chrome-extension/README.md` for setup.
 directly — no FFI hop needed since both are Rust). It covers the same core
 flows as the CLI: unlock/create a vault, search entries, reveal/copy
 password and MFA code with a live countdown, add/edit/delete, attach an MFA
-secret by pasting an `otpauth://` URI or picking a QR code image, and import
-another vault file from the header menu — plus a background sync pull every
-few seconds while unlocked, so another device's changes show up live.
+secret by pasting an `otpauth://` URI or picking a QR code image, import
+another vault file from the header menu, and — once enabled — "unlock with
+your face" (see below) — plus a background sync pull every few seconds
+while unlocked, so another device's changes show up live, and a GNOME
+Shell top-bar indicator (StatusNotifierItem, via the `ksni` crate) that
+opens/focuses the window; on stock GNOME Shell this needs the
+"AppIndicator and KStatusNotifierItem Support" extension to actually show
+up (Ubuntu ships it by default), the app works fully without it either
+way.
 
 ```bash
 cargo run --release -p pass-gnome
 ```
 
 Requires GTK4 ≥ 4.12 and libadwaita ≥ 1.5 development packages installed
-(e.g. `libgtk-4-dev libadwaita-1-dev` on Debian/Ubuntu) to build.
+(e.g. `libgtk-4-dev libadwaita-1-dev` on Debian/Ubuntu) to build, plus
+`libclang` (see [🙂 Face unlock](#-face-unlock-linux) below — pulled in
+transitively via `pass-howdy`). `./install.sh` sets up its icon and
+`.desktop` entry too (see [Installation](#-installation) above).
+
+## 🙂 Face unlock (Linux)
+
+`pass-howdy` adds "unlock with your face" to `passcli`, `pass-gnome`, and
+the Chromium extension, via [howdy](https://github.com/boltgolt/howdy).
+Howdy only recognizes a face — it derives no key — so, like Face ID/Touch
+ID on `pass-apple`, the actual master password is stored in the OS keyring
+once you opt in, and a successful face match gates *retrieving* it, not
+the vault's encryption directly. That's a real, deliberate trade-off — see
+[`pass-howdy/README.md`](pass-howdy/README.md) for the full design
+(including the isolated PAM service it authenticates against, which never
+touches `sudo`/`login`).
+
+```bash
+# Once, after installing howdy itself and enrolling a face with it:
+./install.sh --with-howdy   # or: pass-howdy/setup-pam-service.sh directly
+```
+
+Every client then offers to enable it the next time you unlock a vault
+manually — no per-app setup beyond that one PAM service, since they all
+share the same keyring entry and PAM service.
 
 ## 🍎 macOS / iOS
 
@@ -307,6 +354,9 @@ The project is organized as a Rust workspace with these packages:
 - **`pass-apple`**: Shared SwiftUI app for macOS/iOS (unverified — see above)
 - **`pass-syncd`**: The real-time cross-device sync daemon every client
   above talks to — see [`pass-syncd/README.md`](pass-syncd/README.md)
+- **`pass-howdy`**: Linux face unlock (howdy), used by `passcli`,
+  `pass-gnome`, and `pass-native-host` — see
+  [`pass-howdy/README.md`](pass-howdy/README.md)
 
 ### Library Structure
 
@@ -336,6 +386,10 @@ cargo test -- --nocapture
 ## 📋 Requirements
 
 - **Rust**: 1.70 or later
+- **`libclang`** (Linux only): needed to build `pass-howdy` (its `pam-client`
+  dependency uses `bindgen` at compile time) — install `libclang-dev`, or
+  let `./install.sh` auto-detect an already-installed `libclang-*.so` and
+  shim it in without installing anything system-wide
 - **Supported Platforms**:
   - macOS (Intel & Apple Silicon) — CLI, `pass-syncd`, Chromium extension, native SwiftUI app (`pass-apple/`)
   - Linux (x86_64, ARM64) — CLI, `pass-syncd`, Chromium extension, native GNOME app (`pass-gnome/`)
@@ -396,6 +450,12 @@ Contributions are welcome! Please feel free to submit a Pull Request.
       file-watcher/shared-folder auto-merge — see "Cross-device sync" above)
 - [x] KDBX4 / KeePassXC-compatible vault format (verified against real
       `keepassxc-cli` in both directions — see above)
+- [x] Face unlock on Linux (`pass-howdy`, via howdy — CLI, GNOME app, and
+      Chromium extension — see "Face unlock (Linux)" above)
+- [x] GNOME Shell top-bar indicator for `pass-gnome` (StatusNotifierItem,
+      via the `ksni` crate)
+- [x] `install.sh`: single OS-detecting installer for the CLI, `pass-syncd`,
+      and the native GUI app
 
 ## ⚠️ Disclaimer
 

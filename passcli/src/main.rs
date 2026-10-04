@@ -5,8 +5,6 @@ use dialoguer::{Confirm, Input, Password};
 use passlib::{PasswordEntry, SyncHandle, Vault};
 use std::path::{Path, PathBuf};
 
-const DEFAULT_VAULT_PATH: &str = "passwords.kdbx";
-
 /// A secure, cross-platform password manager
 #[derive(Parser)]
 #[command(name = "pass")]
@@ -14,9 +12,11 @@ const DEFAULT_VAULT_PATH: &str = "passwords.kdbx";
 #[command(version)]
 #[command(about = "A secure password manager with zero-knowledge encryption", long_about = None)]
 struct Cli {
-    /// Path to the vault file
-    #[arg(short, long, default_value = DEFAULT_VAULT_PATH)]
-    vault: PathBuf,
+    /// Path to the vault file. Defaults to the last vault successfully
+    /// unlocked/created, or ~/.vaults/personal.kdbx if there isn't one yet
+    /// — see `passlib::propose_vault_path`.
+    #[arg(short, long)]
+    vault: Option<PathBuf>,
 
     #[command(subcommand)]
     command: Commands,
@@ -114,17 +114,18 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
     #[cfg(windows)]
     let _ = colored::control::set_virtual_terminal(true);
+    let vault_path = cli.vault.unwrap_or_else(passlib::propose_vault_path);
     match cli.command {
-        Commands::Init { import_from_sync } => cmd_init(&cli.vault, import_from_sync),
-        Commands::Add => cmd_add(&cli.vault),
-        Commands::List => cmd_list(&cli.vault),
-        Commands::Get { query } => cmd_get(&cli.vault, &query),
-        Commands::Delete { id } => cmd_delete(&cli.vault, &id),
-        Commands::Update { id } => cmd_update(&cli.vault, &id),
-        Commands::Merge { other } => cmd_merge(&cli.vault, &other),
-        Commands::Totp { action } => cmd_totp(&cli.vault, action),
-        Commands::Sync => cmd_sync_status(&cli.vault),
-        Commands::Interactive => cmd_interactive(&cli.vault),
+        Commands::Init { import_from_sync } => cmd_init(&vault_path, import_from_sync),
+        Commands::Add => cmd_add(&vault_path),
+        Commands::List => cmd_list(&vault_path),
+        Commands::Get { query } => cmd_get(&vault_path, &query),
+        Commands::Delete { id } => cmd_delete(&vault_path, &id),
+        Commands::Update { id } => cmd_update(&vault_path, &id),
+        Commands::Merge { other } => cmd_merge(&vault_path, &other),
+        Commands::Totp { action } => cmd_totp(&vault_path, action),
+        Commands::Sync => cmd_sync_status(&vault_path),
+        Commands::Interactive => cmd_interactive(&vault_path),
     }
 }
 
@@ -158,6 +159,7 @@ fn cmd_init(vault_path: &PathBuf, import_from_sync: bool) -> Result<()> {
 
     let mut vault = Vault::init(vault_path, &master_password)
         .context("Failed to initialize vault")?;
+    passlib::remember_last_vault(vault_path);
 
     println!();
     println!("{}", "✅ Vault created successfully!".green().bold());
@@ -199,9 +201,7 @@ fn cmd_add(vault_path: &PathBuf) -> Result<()> {
     println!("{}", "➕ Add New Password Entry".bold().cyan());
     println!();
 
-    let master_password = prompt_master_password()?;
-    let mut vault = Vault::unlock(vault_path, &master_password)
-        .context("Failed to unlock vault (wrong password?)")?;
+    let (mut vault, master_password) = unlock_vault_interactive(vault_path)?;
 
     println!();
     let website = Input::<String>::new()
@@ -245,9 +245,7 @@ fn cmd_add(vault_path: &PathBuf) -> Result<()> {
 
 /// List all password entries
 fn cmd_list(vault_path: &PathBuf) -> Result<()> {
-    let master_password = prompt_master_password()?;
-    let mut vault = Vault::unlock(vault_path, &master_password)
-        .context("Failed to unlock vault (wrong password?)")?;
+    let (mut vault, master_password) = unlock_vault_interactive(vault_path)?;
     sync_pull(&mut vault, &master_password)?;
 
     let entries = vault.list_entries()
@@ -316,9 +314,7 @@ fn print_totp_line(entry: &PasswordEntry) {
 
 /// Get a specific password entry
 fn cmd_get(vault_path: &PathBuf, query: &str) -> Result<()> {
-    let master_password = prompt_master_password()?;
-    let mut vault = Vault::unlock(vault_path, &master_password)
-        .context("Failed to unlock vault (wrong password?)")?;
+    let (mut vault, master_password) = unlock_vault_interactive(vault_path)?;
     sync_pull(&mut vault, &master_password)?;
 
     let entry = find_entry(&vault, query)?;
@@ -345,9 +341,7 @@ fn cmd_get(vault_path: &PathBuf, query: &str) -> Result<()> {
 
 /// Delete a password entry
 fn cmd_delete(vault_path: &PathBuf, id: &str) -> Result<()> {
-    let master_password = prompt_master_password()?;
-    let mut vault = Vault::unlock(vault_path, &master_password)
-        .context("Failed to unlock vault (wrong password?)")?;
+    let (mut vault, master_password) = unlock_vault_interactive(vault_path)?;
     sync_pull(&mut vault, &master_password)?;
 
     // Show the entry before deleting
@@ -388,9 +382,7 @@ fn cmd_delete(vault_path: &PathBuf, id: &str) -> Result<()> {
 
 /// Update a password entry
 fn cmd_update(vault_path: &PathBuf, id: &str) -> Result<()> {
-    let master_password = prompt_master_password()?;
-    let mut vault = Vault::unlock(vault_path, &master_password)
-        .context("Failed to unlock vault (wrong password?)")?;
+    let (mut vault, master_password) = unlock_vault_interactive(vault_path)?;
     sync_pull(&mut vault, &master_password)?;
 
     // Show current values
@@ -469,9 +461,7 @@ fn cmd_merge(vault_path: &PathBuf, other_path: &PathBuf) -> Result<()> {
         anyhow::bail!("Other vault file not found: {}", other_path.display());
     }
 
-    let master_password = prompt_master_password()?;
-    let mut vault = Vault::unlock(vault_path, &master_password)
-        .context("Failed to unlock vault (wrong password?)")?;
+    let (mut vault, master_password) = unlock_vault_interactive(vault_path)?;
 
     let summary = vault
         .merge_from_file(other_path, &master_password)
@@ -541,9 +531,7 @@ fn cmd_totp_add(vault_path: &PathBuf, id: &str, qr: &Option<PathBuf>, uri: &Opti
     let totp = passlib::totp::parse_otpauth_uri(&otpauth_uri)
         .context("Failed to parse the otpauth URI (is this a TOTP QR code?)")?;
 
-    let master_password = prompt_master_password()?;
-    let mut vault = Vault::unlock(vault_path, &master_password)
-        .context("Failed to unlock vault (wrong password?)")?;
+    let (mut vault, master_password) = unlock_vault_interactive(vault_path)?;
     sync_pull(&mut vault, &master_password)?;
 
     let website = vault
@@ -572,9 +560,7 @@ fn cmd_totp_add(vault_path: &PathBuf, id: &str, qr: &Option<PathBuf>, uri: &Opti
 
 /// Show the current MFA code for an entry
 fn cmd_totp_show(vault_path: &PathBuf, query: &str) -> Result<()> {
-    let master_password = prompt_master_password()?;
-    let mut vault = Vault::unlock(vault_path, &master_password)
-        .context("Failed to unlock vault (wrong password?)")?;
+    let (mut vault, master_password) = unlock_vault_interactive(vault_path)?;
     sync_pull(&mut vault, &master_password)?;
 
     let entry = find_entry(&vault, query)?;
@@ -601,9 +587,7 @@ fn cmd_totp_show(vault_path: &PathBuf, query: &str) -> Result<()> {
 
 /// Remove the MFA secret from an entry
 fn cmd_totp_remove(vault_path: &PathBuf, id: &str) -> Result<()> {
-    let master_password = prompt_master_password()?;
-    let mut vault = Vault::unlock(vault_path, &master_password)
-        .context("Failed to unlock vault (wrong password?)")?;
+    let (mut vault, master_password) = unlock_vault_interactive(vault_path)?;
     sync_pull(&mut vault, &master_password)?;
 
     let website = vault
@@ -635,9 +619,7 @@ fn cmd_sync_status(vault_path: &PathBuf) -> Result<()> {
     println!("{}", "🔄 Sync Status".bold().cyan());
     println!();
 
-    let master_password = prompt_master_password()?;
-    let mut vault = Vault::unlock(vault_path, &master_password)
-        .context("Failed to unlock vault (wrong password?)")?;
+    let (mut vault, master_password) = unlock_vault_interactive(vault_path)?;
 
     match vault.sync_salt() {
         None => {
@@ -705,6 +687,68 @@ fn prompt_master_password() -> Result<String> {
         .context("Failed to read master password")
 }
 
+/// Unlocks `vault_path` interactively: offers "unlock with your face" via
+/// howdy first when it's been enabled for this vault (see `pass-howdy`),
+/// falling back to the master password prompt otherwise or if the face
+/// scan doesn't produce a working password. Right after a successful
+/// *manual* unlock, also offers to enable face unlock for next time if
+/// howdy is available but this vault hasn't opted in yet. This is the
+/// interactive-unlock counterpart to a bare `prompt_master_password()` +
+/// `Vault::unlock` pair, used by every command that needs an unlocked
+/// vault.
+fn unlock_vault_interactive(vault_path: &Path) -> Result<(Vault, String)> {
+    if pass_howdy::is_available_for(vault_path) {
+        let use_face = Confirm::new()
+            .with_prompt("Unlock with your face?")
+            .default(true)
+            .interact()
+            .unwrap_or(false);
+        if use_face {
+            match pass_howdy::unlock_with_face(vault_path)
+                .map_err(|e| e.to_string())
+                .and_then(|pw| Vault::unlock(vault_path, &pw).map(|v| (v, pw)).map_err(|e| e.to_string()))
+            {
+                Ok((vault, password)) => {
+                    passlib::remember_last_vault(vault_path);
+                    return Ok((vault, password));
+                }
+                Err(e) => println!("{}", format!("Face unlock failed ({e}); falling back to your master password.").yellow()),
+            }
+        }
+    }
+
+    let master_password = prompt_master_password()?;
+    let vault = Vault::unlock(vault_path, &master_password)
+        .context("Failed to unlock vault (wrong password?)")?;
+    passlib::remember_last_vault(vault_path);
+
+    offer_howdy_enrollment(vault_path, &master_password);
+
+    Ok((vault, master_password))
+}
+
+/// Right after a successful manual unlock: if howdy is installed and its
+/// PAM service is configured but this vault hasn't opted in to face
+/// unlock yet, offers to enable it (see `pass-howdy::store_password`).
+/// Best-effort/silent about failures — this is a nice-to-have, never
+/// something that should turn a successful unlock into an error.
+fn offer_howdy_enrollment(vault_path: &Path, master_password: &str) {
+    if !pass_howdy::can_enroll() || pass_howdy::has_stored_password(vault_path) {
+        return;
+    }
+    let enable = Confirm::new()
+        .with_prompt("Enable \"unlock with your face\" (howdy) for this vault?")
+        .default(false)
+        .interact()
+        .unwrap_or(false);
+    if enable {
+        match pass_howdy::store_password(vault_path, master_password) {
+            Ok(()) => println!("{}", "✅ Face unlock enabled for this vault.".green()),
+            Err(e) => println!("{}", format!("Could not enable face unlock: {e}").red()),
+        }
+    }
+}
+
 #[cfg(test)]
 mod totp_tests {
     use super::*;
@@ -744,9 +788,7 @@ fn cmd_interactive(vault_path: &PathBuf) -> Result<()> {
     println!("{}", "🔐 Password Manager - Interactive Mode".bold().cyan());
     println!();
     
-    let master_password = prompt_master_password()?;
-    let mut vault = Vault::unlock(vault_path, &master_password)
-        .context("Failed to unlock vault (wrong password?)")?;
+    let (mut vault, master_password) = unlock_vault_interactive(vault_path)?;
     sync_pull(&mut vault, &master_password)?;
 
     // Display header

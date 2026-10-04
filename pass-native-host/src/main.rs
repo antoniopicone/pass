@@ -69,9 +69,13 @@ fn handle(request: &Value) -> Value {
     let result = match cmd {
         "ping" => Ok(json!({ "pong": true })),
         "vaultExists" => vault_exists(request),
+        "getDefaultVaultPath" => default_vault_path(request),
         "checkSyncImportAvailable" => check_sync_import_available(request),
         "initVault" => init_vault(request),
         "unlockVault" => unlock_vault(request),
+        "howdyStatus" => howdy_status(request),
+        "howdyUnlock" => howdy_unlock(request),
+        "howdyEnroll" => howdy_enroll(request),
         "getEntry" => get_entry(request),
         "getEntryHistory" => get_entry_history(request),
         "addEntry" => add_entry(request),
@@ -162,6 +166,7 @@ fn init_vault(req: &Value) -> Result<Value, String> {
     let import_from_sync = req.get("importFromSync").and_then(Value::as_bool).unwrap_or(false);
 
     let mut vault = Vault::init(path, password).map_err(|e| e.to_string())?;
+    passlib::remember_last_vault(std::path::Path::new(path));
 
     let mut imported_count = 0;
     if import_from_sync {
@@ -179,9 +184,60 @@ fn unlock_vault(req: &Value) -> Result<Value, String> {
     let password = field(req, "masterPassword")?;
 
     let mut vault = Vault::unlock(path, password).map_err(|e| e.to_string())?;
+    passlib::remember_last_vault(std::path::Path::new(path));
     sync_pull(&mut vault, password);
     let entries = vault.list_entries().map_err(|e| e.to_string())?;
     Ok(json!({ "entries": entries }))
+}
+
+/// The vault path to prefill the locked screen with: the last one
+/// successfully unlocked/created by *any* pass client on this machine
+/// (CLI, GNOME, or this extension), or `~/.vaults/personal.kdbx` if
+/// there isn't one yet — see `passlib::propose_vault_path`.
+fn default_vault_path(_req: &Value) -> Result<Value, String> {
+    Ok(json!({ "vaultPath": passlib::propose_vault_path().to_string_lossy() }))
+}
+
+/// Whether the popup should offer "unlock with your face" (`canUnlock`,
+/// howdy installed+configured+enrolled for this exact vault) and/or
+/// "enable face unlock" after the next manual unlock (`canEnroll`,
+/// installed+configured but not yet enrolled) — see `pass-howdy`.
+fn howdy_status(req: &Value) -> Result<Value, String> {
+    let path = field(req, "vaultPath")?;
+    let vault_path = std::path::Path::new(path);
+    Ok(json!({
+        "canUnlock": pass_howdy::is_available_for(vault_path),
+        "canEnroll": pass_howdy::can_enroll() && !pass_howdy::has_stored_password(vault_path),
+    }))
+}
+
+/// Authenticates via howdy and, on success, unlocks the vault with the
+/// password stored for it — same response shape as `unlockVault`, plus
+/// `masterPassword` itself, since the caller (background.js) needs it to
+/// populate its own session the same way a manual unlock does (this host
+/// is stateless between calls — see the module doc comment — so nothing
+/// here can hold the session on the extension's behalf instead).
+fn howdy_unlock(req: &Value) -> Result<Value, String> {
+    let path = field(req, "vaultPath")?;
+    let vault_path = std::path::Path::new(path);
+
+    let master_password = pass_howdy::unlock_with_face(vault_path).map_err(|e| e.to_string())?;
+    let mut vault = Vault::unlock(vault_path, &master_password).map_err(|e| e.to_string())?;
+    passlib::remember_last_vault(vault_path);
+    sync_pull(&mut vault, &master_password);
+    let entries = vault.list_entries().map_err(|e| e.to_string())?;
+    Ok(json!({ "entries": entries, "masterPassword": master_password }))
+}
+
+/// Enables face unlock for this vault (stores `masterPassword` in the OS
+/// keyring, gated by a howdy face match from then on — see
+/// `pass-howdy::store_password`). The caller is expected to have already
+/// unlocked with this exact password, same as every other command here.
+fn howdy_enroll(req: &Value) -> Result<Value, String> {
+    let path = field(req, "vaultPath")?;
+    let password = field(req, "masterPassword")?;
+    pass_howdy::store_password(std::path::Path::new(path), password).map_err(|e| e.to_string())?;
+    Ok(json!({}))
 }
 
 fn get_entry(req: &Value) -> Result<Value, String> {

@@ -56,6 +56,21 @@
   "action_lock": {
     "message": "Lock vault"
   },
+  "action_unlock_with_face": {
+    "message": "Unlock with your face"
+  },
+  "banner_enable_face_unlock": {
+    "message": "Enable unlock with your face?"
+  },
+  "action_enable": {
+    "message": "Enable"
+  },
+  "action_not_now": {
+    "message": "Not now"
+  },
+  "status_face_unlock_enabled": {
+    "message": "Face unlock enabled for this vault."
+  },
   "action_add_entry": {
     "message": "Add new entry"
   },

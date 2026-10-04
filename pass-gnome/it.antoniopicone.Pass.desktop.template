@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Pass
+GenericName=Password Manager
+Comment=Secure, zero-knowledge password manager
+Exec=__BINARY_PATH__
+Icon=it.antoniopicone.Pass
+Terminal=false
+Categories=Utility;Security;
+StartupWMClass=it.antoniopicone.Pass
+Keywords=password;vault;kdbx;keepass;totp;otp;

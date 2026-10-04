@@ -17,3 +17,6 @@ glib = "0.20"
 image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "gif", "bmp", "webp"] }
 rqrr = "0.10.1"
 chrono = { workspace = true }
+pass-howdy = { path = "../pass-howdy" }
+ksni = { version = "0.3", features = ["blocking"] }
+async-channel = "2"

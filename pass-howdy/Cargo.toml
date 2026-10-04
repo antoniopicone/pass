@@ -1,0 +1,11 @@
+[package]
+name = "pass-howdy"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+pam-client = "0.5"
+keyring = "4"
+thiserror.workspace = true

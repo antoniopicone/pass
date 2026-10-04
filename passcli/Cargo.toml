@@ -11,6 +11,7 @@ path = "src/main.rs"
 
 [dependencies]
 passlib = { path = "../passlib" }
+pass-howdy = { path = "../pass-howdy" }
 
 # CLI framework
 clap = { version = "4.4", features = ["derive"] }
