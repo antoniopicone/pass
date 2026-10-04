@@ -6,6 +6,11 @@ authors.workspace = true
 license.workspace = true
 
 [dependencies]
-pam-client = "0.5"
 keyring = "4"
 thiserror.workspace = true
+
+# howdy authenticates through Linux-PAM. pam-client doesn't compile against
+# macOS's OpenPAM (and howdy doesn't exist there), so on other platforms
+# this crate builds without it and `unlock_with_face` always fails.
+[target.'cfg(target_os = "linux")'.dependencies]
+pam-client = "0.5"

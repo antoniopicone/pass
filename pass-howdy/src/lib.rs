@@ -32,18 +32,25 @@
 //! [`unlock_with_face`] to actually use it.
 
 use keyring::Entry;
+#[cfg(target_os = "linux")]
 use pam_client::conv_null::Conversation;
+#[cfg(target_os = "linux")]
 use pam_client::{Context, Flag};
 use std::path::{Path, PathBuf};
 
 const KEYRING_SERVICE: &str = "pass";
+#[cfg(target_os = "linux")]
 const PAM_SERVICE: &str = "pass-howdy";
 const PAM_SERVICE_FILE: &str = "/etc/pam.d/pass-howdy";
 
 #[derive(Debug, thiserror::Error)]
 pub enum HowdyError {
+    #[cfg(target_os = "linux")]
     #[error("face authentication failed: {0}")]
     Authentication(#[from] pam_client::Error),
+    #[cfg(not(target_os = "linux"))]
+    #[error("face unlock with howdy is only available on Linux")]
+    Unsupported,
     #[error("could not access the system keyring: {0}")]
     Keyring(#[from] keyring::Error),
     #[error("could not determine the current username ($USER is not set)")]
@@ -131,11 +138,19 @@ pub fn forget_password(vault_path: &Path) -> Result<()> {
 /// otherwise — see `pass-howdy.pam`), so any unexpected prompt is treated
 /// as a failure rather than risking this silently falling back to asking
 /// the system password on our behalf.
+#[cfg(target_os = "linux")]
 pub fn unlock_with_face(vault_path: &Path) -> Result<String> {
     let username = std::env::var("USER").map_err(|_| HowdyError::NoUsername)?;
     let mut context = Context::new(PAM_SERVICE, Some(&username), Conversation::new())?;
     context.authenticate(Flag::NONE)?;
     Ok(entry_for(vault_path)?.get_password()?)
+}
+
+/// howdy is Linux-only; elsewhere [`is_installed`] is already false, so
+/// callers never get as far as offering this.
+#[cfg(not(target_os = "linux"))]
+pub fn unlock_with_face(_vault_path: &Path) -> Result<String> {
+    Err(HowdyError::Unsupported)
 }
 
 #[cfg(test)]

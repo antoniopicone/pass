@@ -63,7 +63,9 @@ echo
 # that package, look for any installed libclang and point clang-sys at it
 # via a local symlink shim — no sudo, nothing installed system-wide.
 ensure_libclang() {
-  if [ -n "${LIBCLANG_PATH:-}" ]; then
+  # Linux only: pam-client is a Linux-only dependency of pass-howdy, so
+  # nothing built elsewhere runs bindgen.
+  if [ "$OS" != "Linux" ] || [ -n "${LIBCLANG_PATH:-}" ]; then
     return
   fi
   # A libclang.so already resolvable (e.g. libclang-dev is installed)?
@@ -74,7 +76,9 @@ ensure_libclang() {
   local found
   # Numeric versions only (libclang-21.so.21) — excludes libclang-cpp.so.*,
   # the separate C++ interface library, which is not what clang-sys wants.
-  found="$(find /usr/lib /usr/lib64 /usr/local/lib -maxdepth 4 -iname "libclang-[0-9]*.so.*" 2>/dev/null | sort -V | tail -1)"
+  # `|| true`: find exits non-zero when one of these directories doesn't
+  # exist, which under `set -e -o pipefail` would end the script silently.
+  found="$(find /usr/lib /usr/lib64 /usr/local/lib -maxdepth 4 -iname "libclang-[0-9]*.so.*" 2>/dev/null | sort -V | tail -1 || true)"
   if [ -z "$found" ]; then
     return # nothing found; let cargo's own error message guide the user
   fi
