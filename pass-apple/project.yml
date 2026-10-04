@@ -1,0 +1,131 @@
+# XcodeGen spec for Pass.xcodeproj — the project itself is generated (and
+# git-ignored), this file is what's versioned. Regenerate with
+# `./build-xcode.sh` (or `xcodegen generate`) after adding or moving files.
+#
+# Four targets: the app and its AutoFill credential provider extension,
+# once per platform, all sharing the same sources. Signing, the App Group
+# and the keychain group come from Config/*.xcconfig, which derive them
+# from DEVELOPMENT_TEAM (set it in Config/Local.xcconfig, git-ignored).
+name: Pass
+
+options:
+  bundleIdPrefix: it.antoniopicone
+  deploymentTarget:
+    macOS: "14.0"
+    iOS: "17.0"
+  createIntermediateGroups: true
+  groupSortPosition: top
+
+packages:
+  # Package.swift next to this file: PassKit + the PassKitFFI.xcframework
+  # binary target (build-xcframework.sh).
+  PassKit:
+    path: .
+
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    CODE_SIGN_STYLE: Automatic
+    # Pass/Info.plist and AutoFill/Info.plist only hold the keys Xcode
+    # can't generate; the rest comes from the INFOPLIST_KEY_* settings.
+    GENERATE_INFOPLIST_FILE: YES
+
+targetTemplates:
+  App:
+    type: application
+    sources:
+      - path: Pass
+      - path: Shared
+    configFiles:
+      Debug: Config/App.xcconfig
+      Release: Config/App.xcconfig
+    dependencies:
+      - package: PassKit
+    settings:
+      base:
+        PRODUCT_NAME: Pass
+        PRODUCT_BUNDLE_IDENTIFIER: it.antoniopicone.Pass
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        INFOPLIST_KEY_CFBundleDisplayName: Pass
+        INFOPLIST_KEY_NSFaceIDUsageDescription: Unlock your Pass vault.
+
+  AutoFill:
+    type: app-extension
+    sources:
+      - path: AutoFill
+      - path: Shared
+    configFiles:
+      Debug: Config/AutoFill.xcconfig
+      Release: Config/AutoFill.xcconfig
+    dependencies:
+      - package: PassKit
+    settings:
+      base:
+        # Same name on both platforms: AutoFill/Info.plist names the
+        # principal class as $(PRODUCT_MODULE_NAME).CredentialProviderViewController.
+        PRODUCT_NAME: AutoFill
+        PRODUCT_BUNDLE_IDENTIFIER: it.antoniopicone.Pass.AutoFill
+
+targets:
+  Pass-macOS:
+    templates: [App]
+    platform: macOS
+    dependencies:
+      - target: AutoFill-macOS
+    settings:
+      base:
+        INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.utilities
+        ENABLE_HARDENED_RUNTIME: YES
+    postBuildScripts:
+      # The CLI and the Chromium native host, team-signed inside Pass.app.
+      - name: Bundle CLI and native host
+        script: '"${SRCROOT}/Scripts/bundle-helpers.sh"'
+        basedOnDependencyAnalysis: false
+
+  Pass-iOS:
+    templates: [App]
+    platform: iOS
+    dependencies:
+      - target: AutoFill-iOS
+    settings:
+      base:
+        TARGETED_DEVICE_FAMILY: "1,2"
+        INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_UISupportedInterfaceOrientations: UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight
+        INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad: UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight
+
+  AutoFill-macOS:
+    templates: [AutoFill]
+    platform: macOS
+    settings:
+      base:
+        ENABLE_HARDENED_RUNTIME: YES
+
+  AutoFill-iOS:
+    templates: [AutoFill]
+    platform: iOS
+    settings:
+      base:
+        TARGETED_DEVICE_FAMILY: "1,2"
+
+schemes:
+  Pass-macOS:
+    build:
+      targets:
+        Pass-macOS: all
+    run:
+      config: Debug
+    archive:
+      config: Release
+  Pass-iOS:
+    build:
+      targets:
+        Pass-iOS: all
+    run:
+      config: Debug
+    archive:
+      config: Release

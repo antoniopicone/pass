@@ -1,7 +1,10 @@
 // Settings shared by the Pass app and its AutoFill extension. Your Team ID
 // is not stored in this repo: everything below derives from
 // DEVELOPMENT_TEAM, which Xcode fills in when you pick a team under
-// Signing & Capabilities (or set it here: DEVELOPMENT_TEAM = ABCDE12345).
+// Signing & Capabilities. Pass.xcodeproj is regenerated from project.yml,
+// which would lose that choice, so put it in Config/Local.xcconfig instead
+// (git-ignored, one line: DEVELOPMENT_TEAM = ABCDE12345).
+#include? "Local.xcconfig"
 
 PASS_ID_SUFFIX = it.antoniopicone.Pass
 

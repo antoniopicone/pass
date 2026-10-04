@@ -71,6 +71,7 @@ xcrun swiftc $EXTRA_SWIFT_FLAGS "${SWIFT_OPT_FLAGS[@]}" \
   -module-name Pass \
   -I "$BUILD_DIR" -I "$FFI_DIR" \
   "$SCRIPT_DIR"/Pass/App/*.swift "$SCRIPT_DIR"/Pass/App/Views/*.swift \
+  "$SCRIPT_DIR"/Shared/*.swift \
   "$BUILD_DIR/PassKit.o" "$FFI_LIB" \
   -framework Security -framework SystemConfiguration -framework CoreFoundation -framework AppKit \
   -o "$APP/Contents/MacOS/Pass"

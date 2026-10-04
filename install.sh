@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
 # Top-level installer for `pass`: detects the OS and installs whatever
 # makes sense there — the CLI, the pass-syncd real-time sync service, and
-# the native GUI app (pass-gnome on Linux; pass-apple needs Xcode on a
-# real Mac, so this only points you at its README). Each piece also has
-# its own narrower install script (pass-syncd/service/, chrome-extension/
-# native-host/, pass-howdy/) if you only want one of them — this is just
-# the "do everything sensible for this machine" entry point.
+# the native GUI app (pass-gnome on Linux; on macOS, pass-apple's Pass.app
+# copied to /Applications — team-signed with AutoFill if a team is set in
+# pass-apple/Config/Local.xcconfig, ad-hoc signed otherwise). Each piece
+# also has its own narrower install script (pass-syncd/service/,
+# chrome-extension/native-host/, pass-howdy/, pass-apple/) if you only want
+# one of them — this is just the "do everything sensible for this machine"
+# entry point.
 #
 # Usage:
 #   ./install.sh                          # CLI + sync service + GUI app
@@ -15,6 +17,10 @@
 #   ./install.sh --with-howdy             # ...and set up the pass-howdy
 #                                          # PAM service (needs sudo — see
 #                                          # pass-howdy/setup-pam-service.sh)
+#   ./install.sh --xcode                  # ...and (macOS) generate
+#                                          # pass-apple/Pass.xcodeproj, to
+#                                          # build for iOS or work in Xcode
+#                                          # (see pass-apple/README.md)
 #   ./install.sh --skip-gui               # CLI + sync service only
 
 set -euo pipefail
@@ -24,15 +30,17 @@ OS="$(uname -s)"
 
 EXTENSION_ID=""
 WITH_HOWDY=0
+WITH_XCODE=0
 SKIP_GUI=0
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --extension-id) EXTENSION_ID="${2:-}"; shift 2 ;;
     --with-howdy) WITH_HOWDY=1; shift ;;
+    --xcode) WITH_XCODE=1; shift ;;
     --skip-gui) SKIP_GUI=1; shift ;;
     -h|--help)
-      sed -n '2,17p' "$0"
+      sed -n '2,/^$/p' "$0"
       exit 0
       ;;
     *) echo "Unknown option: $1" >&2; exit 1 ;;
@@ -106,6 +114,55 @@ esac
 echo
 
 # ------------------------------------------------------------------- GUI
+#
+# macOS has two builds of Pass.app (pass-apple/README.md, "Which build do I
+# need?"); which one is installed depends on whether an Apple Developer
+# team is configured — pass-apple/Config/Local.xcconfig, or DEVELOPMENT_TEAM
+# in the environment:
+#   - with a team: pass-apple/build-xcode.sh — the Xcode project, signed
+#     with that team: AutoFill extension, Touch ID unlock, and the CLI and
+#     Chromium native host bundled inside the app;
+#   - without: pass-apple/build-macos-app.sh — cargo + swiftc, signed
+#     ad-hoc. Needs no team and no Xcode project, but has none of the
+#     above, so it never replaces a team-signed Pass.app already installed.
+pass_apple_has_team() {
+  [ -n "${DEVELOPMENT_TEAM:-}" ] ||
+    grep -qE '^DEVELOPMENT_TEAM *= *[A-Z0-9]{10}' "$REPO_ROOT/pass-apple/Config/Local.xcconfig" 2>/dev/null
+}
+
+install_macos_app() {
+  local apps_dir="/Applications"
+  [ -w "$apps_dir" ] || apps_dir="$HOME/Applications"
+  local dest="${PASS_APP:-$apps_dir/Pass.app}"
+  case "$dest" in
+    *.app) ;;
+    *) echo "PASS_APP must point at an .app bundle, got: $dest" >&2; exit 1 ;;
+  esac
+
+  local built
+  if pass_apple_has_team; then
+    "$REPO_ROOT/pass-apple/build-xcode.sh" macos
+    built="$REPO_ROOT/pass-apple/.build/xcode/Build/Products/Release/Pass.app"
+  else
+    if [ -d "$dest" ] && codesign -dv "$dest" 2>&1 | grep -q '^TeamIdentifier=[A-Z0-9]\{10\}$'; then
+      echo "Skipped: $dest is a team-signed build (AutoFill, Touch ID) and no team is"
+      echo "configured here, so it would be replaced by the ad-hoc one. Set DEVELOPMENT_TEAM"
+      echo "in pass-apple/Config/Local.xcconfig to rebuild it signed."
+      return
+    fi
+    "$REPO_ROOT/pass-apple/build-macos-app.sh"
+    built="$REPO_ROOT/pass-apple/.build/Pass.app"
+  fi
+
+  mkdir -p "$(dirname "$dest")"
+  rm -rf "$dest"
+  ditto "$built" "$dest"
+  echo "Installed: $dest"
+  if pgrep -x Pass >/dev/null 2>&1; then
+    echo "(Pass is running — quit and reopen it to pick up this build.)"
+  fi
+}
+
 if [ "$SKIP_GUI" -eq 0 ]; then
   case "$OS" in
     Linux)
@@ -134,9 +191,25 @@ if [ "$SKIP_GUI" -eq 0 ]; then
       echo " Ubuntu ships it by default. The app works fully without it either way.)"
       ;;
     Darwin)
-      echo "--- macOS/iOS app (pass-apple) ---"
-      echo "This needs Xcode on a real Mac — see pass-apple/README.md for the"
-      echo "build-xcframework.sh + Xcode steps. Not something this script can do."
+      echo "--- Installing the macOS app (Pass.app) ---"
+      if ! xcrun --find actool >/dev/null 2>&1; then
+        echo "Skipped: this needs the full Xcode, not just the command line tools. Install it,"
+        echo "run \"sudo xcode-select -s /Applications/Xcode.app\", then re-run this script."
+      else
+        install_macos_app
+        echo
+        if pass_apple_has_team; then
+          echo "iOS: open pass-apple/Pass.xcodeproj and run the Pass-iOS scheme on your device."
+        elif [ "$WITH_XCODE" -eq 1 ]; then
+          echo "--- Generating the Xcode project (pass-apple/Pass.xcodeproj) ---"
+          "$REPO_ROOT/pass-apple/build-xcode.sh"
+        else
+          echo "Tip: that's the ad-hoc build — no AutoFill, no Touch ID unlock. For those, put"
+          echo "your team in pass-apple/Config/Local.xcconfig (DEVELOPMENT_TEAM = ABCDE12345)"
+          echo "and re-run. For iOS, or to work in Xcode, run with --xcode to generate"
+          echo "pass-apple/Pass.xcodeproj. See pass-apple/README.md."
+        fi
+      fi
       ;;
     *)
       echo "No native GUI app for \"$OS\"."

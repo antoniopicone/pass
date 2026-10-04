@@ -41,6 +41,7 @@ cd pass
 ./install.sh                        # CLI + pass-syncd + the native GUI app
 ./install.sh --extension-id ID      # ...and the Chromium native messaging host
 ./install.sh --with-howdy           # ...and "unlock with your face" (needs sudo — see pass-howdy/)
+./install.sh --xcode                # ...and (macOS) pass-apple/Pass.xcodeproj, for iOS or working in Xcode
 ```
 
 Detects the OS and installs what makes sense there (see `./install.sh --help`);
@@ -355,13 +356,13 @@ container; on macOS the CLI and the Chromium native host are bundled
 inside Pass.app and signed with the same team so they open that same file
 — see `pass-apple/README.md`'s "AutoFill" section.
 
-**Unlike every other client in this repo, this one is unverified.** It was
-written in a Linux sandbox with no Xcode, no macOS/iOS SDK, and no way to
-install even the Linux Swift toolchain to compile-check it (outbound
-network policy blocks `download.swift.org`) — so nothing in `pass-apple/`
-has been built or run. See `pass-apple/README.md` for exactly what that
-means, and the setup steps (`build-xcframework.sh`, then a few minutes in
-Xcode) to build and fix it on a real Mac.
+On macOS, `./install.sh` builds and installs Pass.app: team-signed with
+AutoFill and Touch ID if you put your Apple Developer Team ID in
+`pass-apple/Config/Local.xcconfig`, ad-hoc signed without them otherwise.
+For iOS, `pass-apple/build-xcode.sh` generates the Xcode project. Both
+builds compile and the iOS app launches in the simulator; the team-signed
+features (AutoFill, biometric unlock, App Group) haven't been verified end
+to end yet — see `pass-apple/README.md`.
 
 ## 🏗️ Architecture
 
@@ -377,7 +378,7 @@ The project is organized as a Rust workspace with these packages:
 - **`pass-native-host`**: Native messaging host bridging the Chromium
   extension to `passlib`
 - **`pass-gnome`**: Native GTK4/libadwaita desktop app for Linux
-- **`pass-apple`**: Shared SwiftUI app for macOS/iOS (unverified — see above)
+- **`pass-apple`**: Shared SwiftUI app for macOS/iOS, with an AutoFill extension
 - **`pass-syncd`**: The real-time cross-device sync daemon every client
   above talks to — see [`pass-syncd/README.md`](pass-syncd/README.md)
 - **`pass-howdy`**: Linux face unlock (howdy), used by `passcli`,
@@ -459,11 +460,11 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 - [x] CLI application 
 - [x] GUI application (GNOME/GTK4 — see `pass-gnome/`; a Tauri app was the
       original idea but a native GTK4/libadwaita app fit better on Linux)
-- [~] macOS app (SwiftUI) — see `pass-apple/`; written but **unverified**,
-      needs a real Mac for its first build (no Xcode/macOS SDK in this
-      environment — see `pass-apple/README.md`)
-- [~] iOS support — same shared SwiftUI source as the macOS app, same
-      caveat
+- [~] macOS app (SwiftUI) — see `pass-apple/`; builds and installs via
+      `./install.sh`, the team-signed features (AutoFill, Touch ID) still
+      need verifying end to end
+- [~] iOS support — same shared SwiftUI source as the macOS app; builds
+      and launches in the simulator, not yet run on a device
 - [ ] Password generator
 - [ ] Clipboard integration with auto-clear
 - [x] TOTP 2FA support (`pass totp`, QR code or URI — see above)

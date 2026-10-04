@@ -1,7 +1,12 @@
+# pass-apple: all generated — Pass.xcodeproj from project.yml (XcodeGen),
+# the xcframework by build-xcframework.sh, .build/ by the build scripts.
 *.xcodeproj
 .build/
 .swiftpm/
 pass-apple/PassKitFFI.xcframework/
+# Your Apple Developer Team ID (DEVELOPMENT_TEAM = ...), kept out of the repo.
+pass-apple/Config/Local.xcconfig
+
 .DS_Store
 /target
 chrome-extension/native-host/com.antoniopicone.pass_native_host.json

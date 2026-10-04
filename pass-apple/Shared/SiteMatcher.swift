@@ -39,7 +39,9 @@ enum SiteMatcher {
                 return host(of: identifier.identifier)
             case .URL:
                 return host(of: identifier.identifier)
-            @unknown default:
+            // Anything that isn't a website (e.g. `.app`, added in the
+            // iOS/macOS 27 SDK) has no host to match on.
+            default:
                 return nil
             }
         }

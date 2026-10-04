@@ -27,6 +27,13 @@ TARGETS=(
   x86_64-apple-ios         # iOS Simulator, Intel Macs
 )
 
+# Keeps the C code compiled by build scripts (e.g. `ring`) at the app's
+# deployment targets (Package.swift, project.yml) instead of the SDK's
+# version — otherwise the linker warns on every object, and the library
+# isn't guaranteed to run on the older OS versions the app supports.
+export MACOSX_DEPLOYMENT_TARGET="14.0"
+export IPHONEOS_DEPLOYMENT_TARGET="17.0"
+
 echo "==> Installing Rust targets (rustup target add)"
 for target in "${TARGETS[@]}"; do
   rustup target add "$target"

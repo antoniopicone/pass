@@ -1,6 +1,18 @@
 import Foundation
 import SwiftUI
 
+#if os(macOS)
+import AppKit
+private typealias PlatformColor = NSColor
+private typealias PlatformFont = NSFont
+private typealias PlatformBezierPath = NSBezierPath
+#else
+import UIKit
+private typealias PlatformColor = UIColor
+private typealias PlatformFont = UIFont
+private typealias PlatformBezierPath = UIBezierPath
+#endif
+
 /// Generates website icons locally using site name and deterministic colors
 @MainActor
 final class LogoFetcher: ObservableObject {
@@ -24,34 +36,40 @@ final class LogoFetcher: ObservableObject {
         let size: CGFloat = 64
         let rect = CGRect(x: 0, y: 0, width: size, height: size)
 
+        let draw = {
+            // Draw background circle
+            let path = PlatformBezierPath(ovalIn: rect)
+            backgroundColor.setFill()
+            path.fill()
+
+            // Draw initials
+            let textColor = PlatformColor.white
+            let attributes: [NSAttributedString.Key: Any] = [
+                .font: PlatformFont.systemFont(ofSize: 24, weight: .bold),
+                .foregroundColor: textColor
+            ]
+
+            let attributedString = NSAttributedString(string: initials, attributes: attributes)
+            let textSize = attributedString.size()
+            let textRect = CGRect(
+                x: (rect.width - textSize.width) / 2,
+                y: (rect.height - textSize.height) / 2,
+                width: textSize.width,
+                height: textSize.height
+            )
+            attributedString.draw(in: textRect)
+        }
+
+        #if os(macOS)
         let image = NSImage(size: rect.size)
         image.lockFocus()
-
-        // Draw background circle
-        let path = NSBezierPath(ovalIn: rect)
-        backgroundColor.setFill()
-        path.fill()
-
-        // Draw initials
-        let textColor = NSColor.white
-        let attributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: 24, weight: .bold),
-            .foregroundColor: textColor
-        ]
-
-        let attributedString = NSAttributedString(string: initials, attributes: attributes)
-        let textSize = attributedString.size()
-        let textRect = CGRect(
-            x: (rect.width - textSize.width) / 2,
-            y: (rect.height - textSize.height) / 2,
-            width: textSize.width,
-            height: textSize.height
-        )
-        attributedString.draw(in: textRect)
-
+        draw()
         image.unlockFocus()
-
         return Image(nsImage: image)
+        #else
+        let image = UIGraphicsImageRenderer(size: rect.size).image { _ in draw() }
+        return Image(uiImage: image)
+        #endif
     }
 
     private func extractInitials(from website: String) -> String {
@@ -70,7 +88,7 @@ final class LogoFetcher: ObservableObject {
         }
     }
 
-    private func generateColor(from website: String) -> NSColor {
+    private func generateColor(from website: String) -> PlatformColor {
         // Generate a deterministic color based on the website name
         let domain = extractDomain(from: website) ?? website
         let hash = domain.hashValue
@@ -84,7 +102,7 @@ final class LogoFetcher: ObservableObject {
         let brightness = (r * 299 + g * 587 + b * 114) / 1000
         let factor: CGFloat = brightness > 0.7 ? 0.7 : (brightness < 0.3 ? 1.3 : 1.0)
 
-        return NSColor(
+        return PlatformColor(
             red: min(r * factor, 1.0),
             green: min(g * factor, 1.0),
             blue: min(b * factor, 1.0),

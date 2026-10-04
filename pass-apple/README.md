@@ -13,27 +13,21 @@ Chromium extension use, opening the same real KDBX4/KeePassXC-compatible
 pulls other devices' changes in every few seconds while unlocked — see the
 top-level README's "Cross-device sync" section.
 
-## ⚠️ Verification status — please read before opening this in Xcode
+## Verification status
 
-Every other client in this repo (the CLI, the GNOME app, the Chromium
-extension) was actually built and exercised in this environment — real
-binaries, real `cargo test`, a real GTK4 GUI driven end-to-end under Xvfb,
-real interop verified against a genuine `keepassxc-cli`. **This one is
-different.** This session runs in a Linux sandbox with no Xcode, no macOS
-or iOS SDK, and no simulator — and the one path that could have gotten
-partial verification (installing the Linux Swift toolchain to at least
-compile-check the non-UI `PassKit` package) is blocked by this
-environment's outbound network policy (`download.swift.org` is denied).
+This code was first written in a Linux sandbox with no Apple toolchain, so
+for a while nothing here had been compiled. That's no longer the case, but
+what has and hasn't been exercised is worth knowing:
 
-So: **nothing in `Package.swift`, `Sources/PassKit/`, or `App/` has been
-compiled, let alone run.** It was written carefully — every `passlib_ffi.h`
-call site was cross-checked against the header by hand, pointer ownership
-follows the documented `*_free` contract, platform minimums were picked to
-match the SwiftUI APIs actually used — but "carefully written by hand" is
-not the same guarantee as "the compiler and a simulator agree it works."
-Treat the first build on a real Mac as the first real test of this code,
-and expect to fix at least small things (a typo, an API shape that drifted
-between Swift versions, an Xcode project setting) before it runs.
+- **Built and checked** (Xcode 27, Apple Silicon): the quick macOS build
+  (`build-macos-app.sh`); the generated Xcode project for macOS (universal,
+  AutoFill extension embedded), the iOS Simulator and an iOS device, the
+  last two unsigned; the iOS app launched in a simulator up to the unlock
+  screen.
+- **Not verified yet:** anything that needs a real signature and its
+  entitlements — the team-signed build itself, the AutoFill extension at
+  run time, Touch ID/Face ID unlock, the App Group container, the bundled
+  CLI and native host — and running on a physical iOS device.
 
 ## What's here
 
@@ -42,8 +36,10 @@ pass-apple/
 ├── Package.swift              SPM package: PassKitFFI (binary) + PassKit (Swift wrapper)
 ├── build-xcframework.sh       Run on macOS: builds passlib_ffi for all Apple targets → PassKitFFI.xcframework
 ├── build-macos-app.sh         Run on macOS: builds a runnable .build/Pass.app without an Xcode project
+├── build-xcode.sh             Run on macOS: xcframework + Pass.xcodeproj (XcodeGen) + optional xcodebuild
+├── project.yml                XcodeGen spec for Pass.xcodeproj (the project itself is generated, git-ignored)
 ├── Sources/PassKit/           Swift wrapper around passlib_ffi.h (Vault, PasswordEntry, errors)
-├── Config/                    xcconfigs: App Group + keychain group derived from DEVELOPMENT_TEAM
+├── Config/                    xcconfigs: App Group + keychain group derived from DEVELOPMENT_TEAM (Local.xcconfig)
 ├── Pass/                      The app target (macOS + iOS)
 │   ├── Pass.entitlements      Keychain group, App Group, AutoFill provider
 │   ├── Info.plist             Adds the App Group/keychain group names (merged with Xcode's)
@@ -61,6 +57,28 @@ pass-apple/
 └── Scripts/bundle-helpers.sh  macOS build phase: CLI + Chromium native host into Pass.app, team-signed
 ```
 
+## Which build do I need?
+
+There are two ways to build this, and they don't produce the same app:
+
+| | Quick build | Xcode build |
+|---|---|---|
+| Platforms | macOS | macOS and iOS |
+| Needs | Xcode installed, Rust | Xcode, Rust, XcodeGen, an Apple Developer team |
+| Script | `./build-macos-app.sh` | `./build-xcode.sh [macos\|ios-sim\|ios]` |
+| Rust core | `libpasslib_ffi.a`, built by the script | `PassKitFFI.xcframework` (`build-xcframework.sh`) |
+| Signing | ad-hoc, no entitlements | your team, App Group + keychain group |
+| Vault, search, MFA, import, sync | yes | yes |
+| Touch ID / Face ID unlock | no | yes |
+| AutoFill extension | no | yes |
+| CLI + Chromium host bundled in Pass.app | no | yes (macOS) |
+
+The top-level `./install.sh` picks between them on macOS and copies the
+result to `/Applications`: the Xcode build if a team is configured (see
+below), the quick build otherwise — which never replaces a team-signed
+Pass.app already there. `./install.sh --xcode` also generates
+`Pass.xcodeproj`, for iOS or for working in Xcode.
+
 ## Quick macOS build (no Xcode project)
 
 ```bash
@@ -69,97 +87,85 @@ cd pass-apple
 open .build/Pass.app
 ```
 
-This compiles `passlib_ffi`, `PassKit` and `App/` directly with
-`cargo`/`swiftc` and assembles an ad-hoc signed `Pass.app` (menu bar icon
-included). It needs Xcode with its license accepted, but not the
+This compiles `passlib_ffi`, `PassKit`, `Shared/` and `Pass/App/` directly
+with `cargo`/`swiftc` and assembles an ad-hoc signed `Pass.app` (menu bar
+icon included). It needs Xcode with its license accepted, but not the
 xcframework or an `.xcodeproj`. It's signed without `Pass.entitlements`,
-because `keychain-access-groups` needs a real team ID, so Touch ID unlock
-may not be able to store the password in this build. Use the Xcode setup
-below for a properly signed app, and for iOS.
+because the App Group and `keychain-access-groups` need a real team ID:
+the vault defaults to `~/Documents/personal.kdbx` instead of the App Group
+container, and enabling Touch ID unlock fails (the keychain refuses the
+item with `errSecMissingEntitlement`). Use the Xcode build below for a
+properly signed app, and for iOS.
 
-## Setup (on a Mac)
+## Xcode build (macOS with AutoFill, and iOS)
 
-1. **Build the Rust core for Apple platforms:**
+`Pass.xcodeproj` is not checked in: it's generated from `project.yml` by
+[XcodeGen](https://github.com/yonaskolb/XcodeGen), so the versioned source
+of truth is a file that can be read and diffed.
 
-   ```bash
-   cd pass-apple
-   ./build-xcframework.sh
-   ```
+```bash
+brew install xcodegen                 # once
+cd pass-apple
+echo 'DEVELOPMENT_TEAM = ABCDE12345' > Config/Local.xcconfig   # once: your Team ID
 
-   This needs `rustup` and Xcode's command line tools. It cross-compiles
-   `passlib_ffi` for macOS (arm64 + x86_64), iOS device (arm64), and iOS
-   Simulator (arm64 + x86_64), then assembles them into
-   `PassKitFFI.xcframework` next to this README. Without this step,
-   `Package.swift` fails to resolve — that failure is expected, not a bug.
+./build-xcode.sh                      # xcframework + Pass.xcodeproj → open Pass.xcodeproj
+./build-xcode.sh macos                # ...and build Pass.app (Release, universal)
+./build-xcode.sh ios-sim              # ...and build for the iOS Simulator (needs no team)
+./build-xcode.sh ios                  # ...and build for an iOS device (Release)
+```
 
-2. **Create the Xcode project shell.** This repo intentionally does not
-   include a hand-written `.xcodeproj` — that file format is binary-ish
-   and fragile enough that generating it without Xcode itself to verify it
-   opens felt riskier than just telling you the two-minute path:
+Each run does, in order:
 
-   - File → New → Project → **Multiplatform → App** (this template gives
-     you one shared source set building both a macOS and an iOS target,
-     which is exactly the `App/` layout here).
-   - Product name `Pass`, interface **SwiftUI**.
-   - Delete the template's generated `ContentView.swift` and `PassApp.swift`.
-   - Drag `Pass/App/` (all of it, including `Views/`) and `Shared/` into
-     the project, for both targets; delete the template's own
-     entitlements file (`Config/App.xcconfig` points at
-     `Pass/Pass.entitlements` instead).
-   - File → Add Package Dependencies → **Add Local...** → select this
-     `pass-apple/` directory (the one with `Package.swift`) → add the
-     `PassKit` product to both the macOS and iOS targets.
+1. **`build-xcframework.sh`** cross-compiles `passlib_ffi` for macOS
+   (arm64 + x86_64), iOS device (arm64) and iOS Simulator (arm64 +
+   x86_64) into `PassKitFFI.xcframework`, which `Package.swift` needs to
+   resolve. Needs `rustup`.
+2. **`xcodegen generate`** writes `Pass.xcodeproj` with four targets —
+   `Pass-macOS`, `Pass-iOS` and an `AutoFill-*` extension embedded in each
+   — all on the same sources (`Pass/`, `AutoFill/`, `Shared/`) and the
+   `PassKit` package. Re-run it after adding or moving files; don't edit
+   the project's settings in Xcode, they'd be lost — change `project.yml`
+   or `Config/*.xcconfig` instead.
+3. **`xcodebuild`**, for `macos`/`ios-sim`/`ios`, into
+   `.build/xcode/Build/Products/`. Anything after the action is passed to
+   it. To run on an iPhone, open the project and run the `Pass-iOS` scheme
+   with the device selected.
 
-3. **Base configurations and signing.** In the project's Info tab, set
-   the app target's configurations to `Config/App.xcconfig` (save the
-   project inside `pass-apple/`, since the xcconfigs use paths relative to
-   it). Pick your team under *Signing & Capabilities*: everything that
-   needs a Team ID — the App Group (`TEAMID.it.antoniopicone.Pass` on
-   macOS, `group.it.antoniopicone.Pass` on iOS, which requires that
-   prefix) and the keychain group (`TEAMID.it.antoniopicone.Pass`) — is
-   derived from `DEVELOPMENT_TEAM`, so no Team ID lives in this repo. If
-   automatic signing complains that the App Group isn't registered, add
-   it under *Signing & Capabilities → App Groups* with that same value.
+Notes:
 
-4. **AutoFill extension targets.** File → New → Target → **AutoFill
-   Credential Provider Extension**, once for macOS and once for iOS
-   (bundle IDs e.g. `it.antoniopicone.Pass.AutoFill`, embedded in the
-   matching app). For each:
-   - Delete the template's generated Swift file, storyboard and
-     Info.plist; add this directory's `AutoFill/` and `Shared/` folders
-     (add `Shared/` to the app targets too) and the `PassKit` package
-     product.
-   - Set its configurations to `Config/AutoFill.xcconfig`, which points at
-     `AutoFill/Info.plist` and the right `AutoFill-*.entitlements` per
-     platform (the macOS extension must be sandboxed; it reads the vault
-     only through the App Group).
+- **Team and signing.** Everything that needs a Team ID — the App Group
+  (`TEAMID.it.antoniopicone.Pass` on macOS, `group.it.antoniopicone.Pass`
+  on iOS, which requires that prefix) and the keychain group
+  (`TEAMID.it.antoniopicone.Pass`) — is derived from `DEVELOPMENT_TEAM` in
+  `Config/Shared.xcconfig`, so no Team ID lives in this repo.
+  `Config/Local.xcconfig` is git-ignored; exporting `DEVELOPMENT_TEAM`
+  works too. Signing is automatic and `build-xcode.sh` passes
+  `-allowProvisioningUpdates`, so your Apple ID must be signed in under
+  Xcode → Settings → Accounts. If it complains that the App Group isn't
+  registered, add it under *Signing & Capabilities → App Groups* with that
+  same value. Without a team, `macos` and `ios` still compile, unsigned,
+  as a check — with the same limits as the quick build.
+- **CLI and Chromium native host (macOS).** A build phase runs
+  `Scripts/bundle-helpers.sh`, which builds `pass` and `pass-native-host`
+  for the architectures being built, copies them into
+  `Pass.app/Contents/Helpers/` and signs them with the app's identity and
+  App Group (`ENABLE_USER_SCRIPT_SANDBOXING = NO` in `App.xcconfig` lets
+  it read the Rust workspace). Then:
 
-5. **Bundle the CLI and the Chromium native host (macOS).** In the macOS
-   app target's Build Phases add a *Run Script* phase running
-   `"${SRCROOT}/Scripts/bundle-helpers.sh"`. It builds `pass` and
-   `pass-native-host` for the architectures being built, copies them into
-   `Pass.app/Contents/Helpers/` and signs them with the app's identity and
-   App Group (`ENABLE_USER_SCRIPT_SANDBOXING = NO` is already in
-   `App.xcconfig` so it can read the Rust workspace). Then:
+  ```bash
+  chrome-extension/native-host/install.sh <extension-id>   # picks /Applications/Pass.app's helper
+  sudo ln -sf /Applications/Pass.app/Contents/Helpers/pass /usr/local/bin/pass   # optional
+  ```
 
-   ```bash
-   chrome-extension/native-host/install.sh <extension-id>   # picks /Applications/Pass.app's helper
-   sudo ln -sf /Applications/Pass.app/Contents/Helpers/pass /usr/local/bin/pass   # optional
-   ```
-
-6. **macOS App Sandbox stays off for the app** (`Pass/Pass.entitlements`
-   doesn't enable it): the app must still be able to open a vault picked
-   anywhere on disk and move it into the App Group container. Only the
-   AutoFill extension is sandboxed.
-
-7. **iOS Photos permission.** The MFA QR-photo scanner uses `PhotosPicker`,
-   which does not need `NSPhotoLibraryUsageDescription` (it runs out of
-   process), so no Info.plist entry should be required — but if Xcode
-   complains, add that key with a short description.
-
-8. Build and run. Report back what broke — it's genuinely useful signal
-   for this repo, since it's the only client that's shipped without a
-   compiler having looked at it first.
+- **macOS App Sandbox stays off for the app** (`Pass/Pass.entitlements`
+  doesn't enable it): the app must still be able to open a vault picked
+  anywhere on disk and move it into the App Group container. Only the
+  AutoFill extension is sandboxed.
+- **iOS Photos permission.** The MFA QR-photo scanner uses `PhotosPicker`,
+  which does not need `NSPhotoLibraryUsageDescription` (it runs out of
+  process), so no Info.plist entry should be required — but if Xcode
+  complains, add `INFOPLIST_KEY_NSPhotoLibraryUsageDescription` to the
+  `Pass-iOS` target in `project.yml`.
 
 ## AutoFill: using Pass instead of Apple Passwords
 
