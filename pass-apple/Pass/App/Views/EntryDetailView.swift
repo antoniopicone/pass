@@ -5,6 +5,7 @@ struct EntryDetailView: View {
     let entryId: String
 
     @EnvironmentObject private var state: AppState
+    @StateObject private var logoFetcher = LogoFetcher()
     @State private var entry: PasswordEntry?
     @State private var passwordRevealed = false
     @State private var showEditSheet = false
@@ -15,58 +16,67 @@ struct EntryDetailView: View {
     var body: some View {
         Group {
             if let entry {
-                Form {
-                    Section("Details") {
-                        LabeledContent("Website", value: entry.website)
-                        LabeledContent("URL", value: entry.url)
-                        HStack {
-                            LabeledContent("Username", value: entry.username)
-                            Spacer()
-                            CopyButton { Clipboard.copy(entry.username) }
-                        }
-                        HStack {
-                            LabeledContent("Password", value: passwordRevealed ? entry.password : String(repeating: "•", count: 10))
-                            Spacer()
-                            Button {
-                                passwordRevealed.toggle()
-                            } label: {
-                                Image(systemName: passwordRevealed ? "eye.slash" : "eye")
-                            }
-                            .buttonStyle(.borderless)
-                            CopyButton { Clipboard.copy(entry.password) }
-                        }
-                    }
+                VStack(spacing: 16) {
+                    logoFetcher.logo(forWebsite: entry.website)
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                        .frame(width: 64, height: 64)
+                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                        .shadow(radius: 2)
 
-                    Section("MFA Code") {
-                        if let totp = entry.totp {
+                    Form {
+                        Section("Details") {
+                            LabeledContent("Website", value: entry.website)
+                            LabeledContent("URL", value: entry.url)
                             HStack {
-                                VStack(alignment: .leading) {
-                                    Text(totp.code)
-                                        .font(.title2.monospaced().bold())
-                                    Text("Expires in \(totp.secondsRemaining)s")
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                }
+                                LabeledContent("Username", value: entry.username)
                                 Spacer()
-                                CopyButton { Clipboard.copy(totp.code) }
+                                CopyButton { Clipboard.copy(entry.username) }
                             }
-                            Button("Remove MFA Code", role: .destructive) {
-                                state.clearTOTP(entryId: entryId)
-                                reload()
-                            }
-                        } else {
-                            Button("Add MFA Code…") {
-                                showTOTPAttachSheet = true
+                            HStack {
+                                LabeledContent("Password", value: passwordRevealed ? entry.password : String(repeating: "•", count: 10))
+                                Spacer()
+                                Button {
+                                    passwordRevealed.toggle()
+                                } label: {
+                                    Image(systemName: passwordRevealed ? "eye.slash" : "eye")
+                                }
+                                .buttonStyle(.borderless)
+                                CopyButton { Clipboard.copy(entry.password) }
                             }
                         }
-                    }
 
-                    Section {
-                        LabeledContent("Created", value: entry.createdAt.formatted(date: .abbreviated, time: .shortened))
-                        LabeledContent("Updated", value: entry.updatedAt.formatted(date: .abbreviated, time: .shortened))
+                        Section("MFA Code") {
+                            if let totp = entry.totp {
+                                HStack {
+                                    VStack(alignment: .leading) {
+                                        Text(totp.code)
+                                            .font(.title2.monospaced().bold())
+                                        Text("Expires in \(totp.secondsRemaining)s")
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                    Spacer()
+                                    CopyButton { Clipboard.copy(totp.code) }
+                                }
+                                Button("Remove MFA Code", role: .destructive) {
+                                    state.clearTOTP(entryId: entryId)
+                                    reload()
+                                }
+                            } else {
+                                Button("Add MFA Code…") {
+                                    showTOTPAttachSheet = true
+                                }
+                            }
+                        }
+
+                        Section {
+                            LabeledContent("Created", value: entry.createdAt.formatted(date: .abbreviated, time: .shortened))
+                            LabeledContent("Updated", value: entry.updatedAt.formatted(date: .abbreviated, time: .shortened))
+                        }
                     }
+                    .formStyle(.grouped)
                 }
-                .formStyle(.grouped)
                 .navigationTitle(entry.website)
                 .toolbar {
                     ToolbarItem(placement: .primaryAction) {

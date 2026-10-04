@@ -1,3 +1,4 @@
+import Foundation
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -11,6 +12,7 @@ struct UnlockView: View {
     @State private var hasBiometricCredential = false
     @State private var isAuthenticatingBiometrics = false
     @State private var hasAttemptedAutoBiometricUnlock = false
+    @State private var showCreateVaultAlert = false
 
     private var kdbxType: UTType {
         UTType(filenameExtension: "kdbx") ?? .data
@@ -76,8 +78,7 @@ struct UnlockView: View {
                     .disabled(state.vaultPath.isEmpty || password.isEmpty)
 
                 Button("Create New Vault") {
-                    state.createVault(password: password)
-                    password = ""
+                    showCreateVaultAlert = true
                 }
                 .disabled(state.vaultPath.isEmpty || password.isEmpty)
             }
@@ -114,6 +115,26 @@ struct UnlockView: View {
             if case .success(let url) = result {
                 state.importVaultFile(from: url)
                 isChoosingVault = false
+            }
+        }
+        .alert("Create New Vault", isPresented: $showCreateVaultAlert) {
+            if FileManager.default.fileExists(atPath: state.vaultPath) {
+                Button("Choose Different Location") {
+                    isChoosingVault = true
+                }
+                Button("Cancel", role: .cancel) {}
+            } else {
+                Button("Create") {
+                    state.createVault(password: password)
+                    password = ""
+                }
+                Button("Cancel", role: .cancel) {}
+            }
+        } message: {
+            if FileManager.default.fileExists(atPath: state.vaultPath) {
+                Text("A vault already exists at \(vaultDisplayName). Please choose a different location for the new vault.")
+            } else {
+                Text("Create a new vault at \(state.vaultPath)? This will create a new password database with the master password you entered.")
             }
         }
         .onAppear {

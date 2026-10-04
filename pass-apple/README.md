@@ -38,14 +38,32 @@ between Swift versions, an Xcode project setting) before it runs.
 pass-apple/
 ├── Package.swift              SPM package: PassKitFFI (binary) + PassKit (Swift wrapper)
 ├── build-xcframework.sh       Run on macOS: builds passlib_ffi for all Apple targets → PassKitFFI.xcframework
+├── build-macos-app.sh         Run on macOS: builds a runnable .build/Pass.app without an Xcode project
 ├── Sources/PassKit/           Swift wrapper around passlib_ffi.h (Vault, PasswordEntry, errors)
 └── App/                       Shared SwiftUI source for both the macOS and iOS app targets
     ├── PassApp.swift          @main entry point
     ├── RootView.swift         Locked ⇄ unlocked switch
     ├── AppState.swift         ObservableObject driving all vault operations
     ├── Clipboard.swift        Cross-platform copy-to-clipboard
+    ├── MenuBarContent.swift   macOS status bar icon menu (open window / lock / quit)
     └── Views/                 Unlock, entry list, entry detail, add/edit form, MFA attach, merge
 ```
+
+## Quick macOS build (no Xcode project)
+
+```bash
+cd pass-apple
+./build-macos-app.sh          # CONFIGURATION=debug / ARCH=x86_64 to override
+open .build/Pass.app
+```
+
+This compiles `passlib_ffi`, `PassKit` and `App/` directly with
+`cargo`/`swiftc` and assembles an ad-hoc signed `Pass.app` (menu bar icon
+included). It needs Xcode with its license accepted, but not the
+xcframework or an `.xcodeproj`. It's signed without `Pass.entitlements`,
+because `keychain-access-groups` needs a real team ID, so Touch ID unlock
+may not be able to store the password in this build. Use the Xcode setup
+below for a properly signed app, and for iOS.
 
 ## Setup (on a Mac)
 

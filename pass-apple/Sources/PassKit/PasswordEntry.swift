@@ -4,7 +4,7 @@ import PassKitFFI
 /// The current TOTP/MFA code for an entry, as computed by passlib at the
 /// moment the entry was fetched (not live-updating on its own — re-fetch
 /// the entry, e.g. on a 1-second timer, to refresh it).
-public struct TOTPStatus: Equatable, Sendable {
+public struct TOTPStatus: Equatable, Hashable, Sendable {
     public let code: String
     public let secondsRemaining: Int
 }
@@ -14,7 +14,7 @@ public struct TOTPStatus: Equatable, Sendable {
 /// `passlib_ffi`'s list/get calls both return the full entry including the
 /// plaintext password (there's no separate lighter "summary" type at the C
 /// boundary), so this one struct covers both list rows and detail views.
-public struct PasswordEntry: Identifiable, Equatable, Sendable {
+public struct PasswordEntry: Identifiable, Equatable, Hashable, Sendable {
     public let id: String
     public let website: String
     public let url: String
@@ -54,7 +54,7 @@ public struct PasswordEntry: Identifiable, Equatable, Sendable {
 }
 
 /// One previous password from an entry's KDBX4 history, newest first.
-public struct PasswordHistoryEntry: Identifiable, Equatable, Sendable {
+public struct PasswordHistoryEntry: Identifiable, Equatable, Hashable, Sendable {
     public var id: Date { changedAt }
     public let password: String
     public let changedAt: Date

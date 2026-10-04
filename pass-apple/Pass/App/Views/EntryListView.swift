@@ -3,12 +3,13 @@ import SwiftUI
 
 struct EntryListView: View {
     @EnvironmentObject private var state: AppState
+    @StateObject private var logoFetcher = LogoFetcher()
 
     @State private var searchText = ""
     @State private var showAddSheet = false
     @State private var showMergeSheet = false
     @State private var showSettingsSheet = false
-    @State private var selectedEntryId: String?
+    @State private var selectedEntry: PasswordEntry?
 
     private var filteredEntries: [PasswordEntry] {
         guard !searchText.isEmpty else { return state.entries }
@@ -22,22 +23,33 @@ struct EntryListView: View {
 
     var body: some View {
         NavigationSplitView {
-            List(selection: $selectedEntryId) {
-                if filteredEntries.isEmpty {
-                    ContentUnavailableView(
-                        state.entries.isEmpty ? "No Entries Yet" : "No Matches",
-                        systemImage: "key.fill",
-                        description: Text(state.entries.isEmpty ? "Add your first password entry." : "Try a different search.")
-                    )
-                } else {
-                    ForEach(filteredEntries) { entry in
-                        EntryRow(entry: entry)
-                            .tag(entry.id)
+            VStack(spacing: 8) {
+                HStack {
+                    Image(systemName: "magnifyingglass")
+                        .foregroundStyle(.secondary)
+                    TextField("Search entries", text: $searchText)
+                        .textFieldStyle(.plain)
+                }
+                .padding(.horizontal)
+                .padding(.vertical, 8)
+
+                List(selection: $selectedEntry) {
+                    if filteredEntries.isEmpty {
+                        ContentUnavailableView(
+                            state.entries.isEmpty ? "No Entries Yet" : "No Matches",
+                            systemImage: "key.fill",
+                            description: Text(state.entries.isEmpty ? "Add your first password entry." : "Try a different search.")
+                        )
+                    } else {
+                        ForEach(filteredEntries) { entry in
+                            NavigationLink(value: entry) {
+                                EntryRow(entry: entry, logoFetcher: logoFetcher)
+                            }
+                        }
                     }
                 }
             }
             .navigationTitle("Pass")
-            .searchable(text: $searchText, prompt: "Search entries")
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
                     Button {
@@ -86,8 +98,9 @@ struct EntryListView: View {
             // Keeps the detail pane in sync when the selected entry is
             // deleted (or moved to the Recycle Bin) out from under it —
             // `state.entries` already excludes recycled entries.
-            if let selectedEntryId, state.entries.contains(where: { $0.id == selectedEntryId }) {
-                EntryDetailView(entryId: selectedEntryId)
+            if let selectedEntry, state.entries.contains(where: { $0.id == selectedEntry.id }) {
+                EntryDetailView(entryId: selectedEntry.id)
+                    .id(selectedEntry.id)
             } else {
                 ContentUnavailableView(
                     "No Entry Selected",
@@ -101,9 +114,16 @@ struct EntryListView: View {
 
 private struct EntryRow: View {
     let entry: PasswordEntry
+    @ObservedObject var logoFetcher: LogoFetcher
 
     var body: some View {
-        HStack {
+        HStack(spacing: 12) {
+            logoFetcher.logo(forWebsite: entry.website)
+                .resizable()
+                .aspectRatio(contentMode: .fit)
+                .frame(width: 32, height: 32)
+                .clipShape(RoundedRectangle(cornerRadius: 6))
+
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 4) {
                     Text(entry.website)
